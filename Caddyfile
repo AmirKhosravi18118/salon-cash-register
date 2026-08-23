@@ -1,0 +1,21 @@
+{$APP_DOMAIN:localhost} {
+    root * /srv
+    encode zstd gzip
+
+    @serviceWorker path /sw.js
+    header @serviceWorker Cache-Control "no-cache, no-store, must-revalidate"
+
+    @manifest path /manifest.webmanifest
+    header @manifest Cache-Control "public, max-age=3600"
+
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        -Server
+    }
+
+    try_files {path} /index.html
+    file_server
+}
