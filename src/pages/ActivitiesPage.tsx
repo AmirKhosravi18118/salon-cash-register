@@ -1,113 +1,170 @@
-import { ArrowDown, ArrowUp, Plus } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
-import { Card, Modal, Money, PageHeader, Toast } from '../components/UI'
-import { db, getOpenSession, saveMovement } from '../db'
-import { dayKey, formatDate, parseEuro } from '../lib/format'
-import type { CashTransaction, ExpenseCategory, MovementKind, User } from '../types'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Card, Icon, Modal, Money, PageHeader, Segmented, SmartMoneyInput, Toast } from '../components/ui'
+import { db, recordActivity } from '../db'
+import { formatDate, localMonthKey, monthNames, parseMoney } from '../lib/format'
+import type {
+  CashTransaction, ExpenseCategory, TransactionDirection,
+  TransactionKind, UserAccount,
+} from '../types'
 
 export function ActivitiesPage({
   user, revision, onChanged,
-}: { user: User; revision: number; onChanged: () => void }) {
-  const [tab, setTab] = useState<'in' | 'out'>('in')
+}: { user: UserAccount; revision: number; onChanged: () => void }) {
+  const currentMonth = localMonthKey()
+  const [direction, setDirection] = useState<TransactionDirection>('in')
+  const [year, setYear] = useState(Number(currentMonth.slice(0, 4)))
+  const [month, setMonth] = useState(Number(currentMonth.slice(5, 7)))
   const [transactions, setTransactions] = useState<CashTransaction[]>([])
-  const [categories, setCategories] = useState<ExpenseCategory[]>([])
-  const [from, setFrom] = useState('')
-  const [to, setTo] = useState('')
-  const [modal, setModal] = useState(false)
-  const [kind, setKind] = useState<Exclude<MovementKind, 'service'>>('expense')
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
+  const [addOpen, setAddOpen] = useState(false)
   const [amount, setAmount] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [note, setNote] = useState('')
   const [toast, setToast] = useState('')
 
-  const load = async () => {
-    const [tx, expenseRows] = await Promise.all([
+  const load = useCallback(async () => {
+    const [items, categories] = await Promise.all([
       db.transactions.orderBy('createdAt').reverse().toArray(),
-      db.expenseCategories.orderBy('order').toArray(),
+      db.expenseCategories.orderBy('sortOrder').toArray(),
     ])
-    setTransactions(tx)
-    setCategories(expenseRows.filter((item) => item.active))
-  }
+    setTransactions(items)
+    setExpenseCategories(categories.filter((item) => item.active))
+  }, [])
 
-  useEffect(() => { load() }, [revision])
+  useEffect(() => { load() }, [load, revision])
 
-  const filtered = transactions.filter((item) => {
-    const direction = tab === 'in' ? item.cashEffectCents > 0 : item.cashEffectCents < 0
-    const key = dayKey(item.createdAt)
-    return direction && (!from || key >= from) && (!to || key <= to)
+  const years = useMemo(() => {
+    const values = new Set<number>([new Date().getFullYear()])
+    transactions.forEach((item) => values.add(new Date(item.createdAt).getFullYear()))
+    return [...values].sort((a, b) => b - a)
+  }, [transactions])
+
+  const visible = transactions.filter((item) => {
+    const date = new Date(item.createdAt)
+    return item.direction === direction
+      && date.getFullYear() === year
+      && date.getMonth() + 1 === month
   })
 
-  const openAdd = () => {
-    setKind(tab === 'in' ? 'deposit' : 'expense')
-    setCategoryId('')
+  const save = async () => {
+    const amountCents = parseMoney(amount)
+    if (amountCents <= 0) return
+    const expenseCategory = expenseCategories.find((item) => item.id === categoryId)
+    const kind: TransactionKind = direction === 'in' ? 'deposit' : 'expense'
+    await recordActivity({
+      direction, kind, amountCents,
+      categoryId: direction === 'out' ? expenseCategory?.id : undefined,
+      categoryName: direction === 'out'
+        ? expenseCategory?.name ?? 'سایر هزینه‌ها'
+        : 'ورودی',
+      note, user,
+    })
     setAmount('')
     setNote('')
-    setModal(true)
-  }
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault()
-    if (!(await getOpenSession())) {
-      setToast('برای ثبت فعالیت ابتدا باید شیفت را باز کنید.')
-      return
-    }
-    const category = categories.find((item) => item.id === categoryId)
-    await saveMovement({
-      kind,
-      amountCents: parseEuro(amount),
-      categoryId: category?.id,
-      categoryName: kind === 'expense' ? category?.name ?? 'سایر هزینه‌ها' : kind === 'bank' ? 'واریز به بانک' : 'ورودی صندوق',
-      note,
-      user,
-    })
-    setModal(false)
+    setCategoryId('')
+    setAddOpen(false)
     setToast('فعالیت ثبت شد.')
-    onChanged()
     await load()
+    onChanged()
   }
 
   return (
     <>
-      <PageHeader
-        title="فعالیت‌ها"
-        subtitle="ورودی‌ها و خروجی‌ها به‌صورت جداگانه نمایش داده می‌شوند."
-        action={<button className="primary-button" type="button" onClick={openAdd}><Plus size={18} />ثبت فعالیت</button>}
-      />
+      <PageHeader title="فعالیت‌ها" subtitle="ورودی‌ها و خروجی‌ها به‌صورت جداگانه نمایش داده می‌شوند."
+        action={<button className="button primary" type="button" onClick={() => setAddOpen(true)}>
+          <Icon name="plus"/>ثبت فعالیت
+        </button>}/>
 
-      <Card>
-        <div className="activity-toolbar">
-          <div className="segmented">
-            <button className={tab === 'in' ? 'active' : ''} onClick={() => setTab('in')} type="button"><ArrowDown size={18} />ورودی‌ها</button>
-            <button className={tab === 'out' ? 'active' : ''} onClick={() => setTab('out')} type="button"><ArrowUp size={18} />خروجی‌ها و هزینه‌ها</button>
+      <Card className="activities-card">
+        <div className="activities-toolbar">
+          <Segmented value={direction} onChange={(value) =>
+            setDirection(value as TransactionDirection)}
+            items={[
+              { value: 'in', label: 'ورودی‌ها' },
+              { value: 'out', label: 'خروجی‌ها و هزینه‌ها' },
+            ]}/>
+          <div className="month-filters">
+            <label><span>سال</span>
+              <select className="input numeric" dir="ltr" value={year}
+                onChange={(event) => setYear(Number(event.target.value))}>
+                {years.map((value) => <option value={value} key={value}>{value}</option>)}
+              </select>
+            </label>
+            <label><span>ماه</span>
+              <select className="input" value={month}
+                onChange={(event) => setMonth(Number(event.target.value))}>
+                {monthNames.map((name, index) =>
+                  <option value={index + 1} key={name}>{name}</option>)}
+              </select>
+            </label>
           </div>
-          <div className="date-filters"><label>از<input type="date" value={from} onChange={(event) => setFrom(event.target.value)} /></label><label>تا<input type="date" value={to} onChange={(event) => setTo(event.target.value)} /></label></div>
         </div>
 
-        {!filtered.length ? <div className="empty-state">در این بازه موردی ثبت نشده است.</div> : (
+        {!visible.length ? (
+          <div className="empty-state"><p>در ماه انتخاب‌شده فعالیتی وجود ندارد.</p></div>
+        ) : (
           <div className="activity-list">
-            {filtered.map((item) => (
-              <div className="activity-row" key={item.id}>
-                <div><strong>{item.items.map((entry) => entry.name).join('، ') || item.categoryName}</strong><span>{formatDate(item.createdAt)} — {item.userName}</span>{item.note && <small>{item.note}</small>}</div>
-                <strong className={item.cashEffectCents > 0 ? 'positive' : 'negative'}><Money cents={item.cashEffectCents} signed /></strong>
-              </div>
+            {visible.map((item) => (
+              <article className="activity-row detailed" key={item.id}>
+                <div className={`activity-direction ${item.direction}`}>
+                  <Icon name={item.direction === 'in' ? 'arrow-down' : 'arrow-up'}/>
+                </div>
+                <div className="activity-copy">
+                  <strong>{item.items.length
+                    ? item.items.map((entry) => entry.name).join('، ')
+                    : item.categoryName || 'فعالیت'}</strong>
+                  <small>
+                    <span className="numeric">{formatDate(item.createdAt)}</span>
+                    {' — '}{item.userName}
+                  </small>
+                  {item.note && <p>{item.note}</p>}
+                </div>
+                <div className="activity-meta">
+                  <strong className={item.direction === 'in' ? 'positive' : 'negative'}>
+                    <Money cents={item.direction === 'in' ? item.amountCents : -item.amountCents} signed/>
+                  </strong>
+                  <small className="numeric">{item.sequence}</small>
+                </div>
+              </article>
             ))}
           </div>
         )}
       </Card>
 
-      <Modal open={modal} title={tab === 'in' ? 'ثبت ورودی' : 'ثبت خروجی یا هزینه'} onClose={() => setModal(false)}>
-        <form className="modal-form" onSubmit={submit}>
-          <label><span>نوع فعالیت</span><select className="input" value={kind} onChange={(event) => setKind(event.target.value as Exclude<MovementKind, 'service'>)}>
-            {tab === 'in' ? <><option value="deposit">واریز به صندوق</option><option value="adjustment">اصلاح افزایشی</option></> : <><option value="expense">هزینه</option><option value="withdrawal">برداشت</option><option value="bank">واریز به بانک</option><option value="refund">بازپرداخت</option></>}
-          </select></label>
-          {kind === 'expense' && <label><span>کتگوری هزینه</span><select className="input" value={categoryId} onChange={(event) => setCategoryId(event.target.value)} required><option value="">انتخاب کن</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
-          <label><span>مبلغ</span><input className="input input-large" type="number" min="0.01" step="0.01" dir="ltr" value={amount} onChange={(event) => setAmount(event.target.value)} required /></label>
-          <label><span>توضیحات</span><textarea className="input" value={note} onChange={(event) => setNote(event.target.value)} /></label>
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setModal(false)}>انصراف</button><button className="primary-button" type="submit">ثبت</button></div>
-        </form>
+      <Modal open={addOpen} title="ثبت فعالیت" onClose={() => setAddOpen(false)}
+        className="small-modal">
+        <div className="simple-form">
+          <Segmented value={direction} onChange={(value) =>
+            setDirection(value as TransactionDirection)}
+            items={[
+              { value: 'in', label: 'ورودی' },
+              { value: 'out', label: 'خروجی' },
+            ]}/>
+          {direction === 'out' && (
+            <label className="field"><span>کتگوری هزینه</span>
+              <select className="input" value={categoryId}
+                onChange={(event) => setCategoryId(event.target.value)}>
+                <option value="">انتخاب کنید</option>
+                {expenseCategories.map((item) =>
+                  <option value={item.id} key={item.id}>{item.name}</option>)}
+              </select>
+            </label>
+          )}
+          <label className="field"><span>مبلغ</span>
+            <SmartMoneyInput value={amount} onChange={setAmount}/></label>
+          <label className="field"><span>توضیحات</span>
+            <textarea className="input textarea" value={note}
+              onChange={(event) => setNote(event.target.value)}/></label>
+          <div className="modal-actions">
+            <button className="button secondary" type="button"
+              onClick={() => setAddOpen(false)}>انصراف</button>
+            <button className="button primary" type="button" onClick={save}>
+              <Icon name="check"/>ثبت
+            </button>
+          </div>
+        </div>
       </Modal>
-
-      {toast && <Toast message={toast} onDone={() => setToast('')} />}
+      {toast && <Toast message={toast} onDone={() => setToast('')}/>}
     </>
   )
 }

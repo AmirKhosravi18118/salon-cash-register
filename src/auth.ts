@@ -1,51 +1,62 @@
 import { db } from './db'
-import type { Role, User } from './types'
+import type { AuthSession, Role, UserAccount } from './types'
+import { uid } from './lib/format'
 
-const encoder = new TextEncoder()
-const uid = () => crypto.randomUUID()
+const SESSION_KEY = 'firouzeh-session-v090'
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary)
+function normalizeUsername(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, '')
 }
 
-function base64ToBytes(value: string): Uint8Array {
-  const binary = atob(value)
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+function bytesToHex(bytes: Uint8Array): string {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-async function derivePassword(password: string, salt: Uint8Array): Promise<string> {
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits'],
-  )
-  const bits = await crypto.subtle.deriveBits({
-    name: 'PBKDF2',
-    salt: salt.buffer as ArrayBuffer,
-    iterations: 210_000,
-    hash: 'SHA-256',
-  }, keyMaterial, 256)
-  return bytesToBase64(new Uint8Array(bits))
+function randomSalt(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return bytesToHex(bytes)
+}
+
+async function hashPassword(password: string, salt: string): Promise<string> {
+  const content = new TextEncoder().encode(`${salt}:${password}`)
+  const digest = await crypto.subtle.digest('SHA-256', content)
+  return bytesToHex(new Uint8Array(digest))
+}
+
+export async function managerExists(): Promise<boolean> {
+  return Boolean(await db.users.where('role').equals('manager').first())
+}
+
+export async function createManager(input: {
+  name: string
+  username: string
+  password: string
+}): Promise<UserAccount> {
+  if (await managerExists()) throw new Error('MANAGER_EXISTS')
+  return createUser({ ...input, role: 'manager' })
 }
 
 export async function createUser(input: {
-  displayName: string
+  name: string
   username: string
   password: string
   role: Role
-}): Promise<User> {
-  const normalized = input.username.trim().toLowerCase()
-  if (!normalized || input.password.length < 6) throw new Error('INVALID_USER')
-  if (await db.users.where('username').equals(normalized).first()) {
+}): Promise<UserAccount> {
+  const username = normalizeUsername(input.username)
+  if (!username || input.password.length < 6 || !input.name.trim()) {
+    throw new Error('INVALID_USER')
+  }
+  if (await db.users.where('username').equals(username).first()) {
     throw new Error('USERNAME_EXISTS')
   }
-  const salt = crypto.getRandomValues(new Uint8Array(16))
-  const user: User = {
-    id: uid(),
-    displayName: input.displayName.trim(),
-    username: normalized,
-    passwordHash: await derivePassword(input.password, salt),
-    salt: bytesToBase64(salt),
+
+  const salt = randomSalt()
+  const user: UserAccount = {
+    id: uid('user'),
+    name: input.name.trim(),
+    username,
+    passwordSalt: salt,
+    passwordHash: await hashPassword(input.password, salt),
     role: input.role,
     active: true,
     createdAt: new Date().toISOString(),
@@ -54,39 +65,70 @@ export async function createUser(input: {
   return user
 }
 
-export async function updateUserPassword(userId: string, password: string): Promise<void> {
-  if (password.length < 6) throw new Error('INVALID_PASSWORD')
+export async function login(usernameInput: string, password: string): Promise<UserAccount> {
+  const username = normalizeUsername(usernameInput)
+  const user = await db.users.where('username').equals(username).first()
+  if (!user) throw new Error('INVALID_LOGIN')
+  if (!user.active) throw new Error('ACCOUNT_DISABLED')
+  const passwordHash = await hashPassword(password, user.passwordSalt)
+  if (passwordHash !== user.passwordHash) throw new Error('INVALID_LOGIN')
+
+  const updated = { ...user, lastLoginAt: new Date().toISOString() }
+  await db.users.put(updated)
+  const session: AuthSession = { userId: user.id, createdAt: new Date().toISOString() }
+  localStorage.setItem(SESSION_KEY, JSON.stringify(session))
+  return updated
+}
+
+export async function currentUser(): Promise<UserAccount | undefined> {
+  try {
+    const value = localStorage.getItem(SESSION_KEY)
+    if (!value) return undefined
+    const session = JSON.parse(value) as AuthSession
+    const user = await db.users.get(session.userId)
+    if (!user?.active) {
+      logout()
+      return undefined
+    }
+    return user
+  } catch {
+    logout()
+    return undefined
+  }
+}
+
+export function logout(): void {
+  localStorage.removeItem(SESSION_KEY)
+}
+
+export async function resetPassword(userId: string, nextPassword: string): Promise<void> {
+  if (nextPassword.length < 6) throw new Error('SHORT_PASSWORD')
   const user = await db.users.get(userId)
   if (!user) throw new Error('USER_NOT_FOUND')
-  const salt = crypto.getRandomValues(new Uint8Array(16))
+  const salt = randomSalt()
   await db.users.put({
     ...user,
-    salt: bytesToBase64(salt),
-    passwordHash: await derivePassword(password, salt),
+    passwordSalt: salt,
+    passwordHash: await hashPassword(nextPassword, salt),
   })
 }
 
-export async function authenticate(username: string, password: string): Promise<User> {
-  const user = await db.users.where('username').equals(username.trim().toLowerCase()).first()
-  if (!user || !user.active) throw new Error('LOGIN_FAILED')
-  const candidate = await derivePassword(password, base64ToBytes(user.salt))
-  if (candidate !== user.passwordHash) throw new Error('LOGIN_FAILED')
-  return user
+export async function updateUser(input: {
+  id: string
+  name: string
+  username: string
+  active: boolean
+}): Promise<void> {
+  const user = await db.users.get(input.id)
+  if (!user) throw new Error('USER_NOT_FOUND')
+  const username = normalizeUsername(input.username)
+  const duplicate = await db.users.where('username').equals(username).first()
+  if (duplicate && duplicate.id !== input.id) throw new Error('USERNAME_EXISTS')
+  await db.users.put({ ...user, name: input.name.trim(), username, active: input.active })
 }
 
-const SESSION_KEY = 'firouzeh-current-user-v080'
-
-export function saveAuthSession(user: User): void {
-  sessionStorage.setItem(SESSION_KEY, user.id)
-}
-
-export async function restoreAuthSession(): Promise<User | undefined> {
-  const id = sessionStorage.getItem(SESSION_KEY)
-  if (!id) return undefined
-  const user = await db.users.get(id)
-  return user?.active ? user : undefined
-}
-
-export function clearAuthSession(): void {
-  sessionStorage.removeItem(SESSION_KEY)
+export async function deleteUser(userId: string): Promise<void> {
+  const user = await db.users.get(userId)
+  if (!user || user.role === 'manager') throw new Error('CANNOT_DELETE')
+  await db.users.delete(userId)
 }

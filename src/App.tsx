@@ -1,120 +1,124 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { clearAuthSession, restoreAuthSession } from './auth'
+import { currentUser, logout } from './auth'
 import { CartModal } from './components/CartModal'
-import { Layout, navigate } from './components/Layout'
-import { Spinner } from './components/UI'
-import { ensureSeedData, getTheme, hasUsers } from './db'
-import { applyTheme } from './lib/theme'
+import { Layout, go } from './components/Layout'
+import { Modal } from './components/ui'
+import { ensureDatabase } from './db'
+import { applyTheme, loadTheme } from './lib/theme'
 import { ActivitiesPage } from './pages/ActivitiesPage'
 import { AnalyticsPage } from './pages/AnalyticsPage'
 import { AuthPage } from './pages/AuthPage'
 import { CashboxPage } from './pages/CashboxPage'
-import { CheckoutPage } from './pages/CheckoutPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { ServicesPage } from './pages/ServicesPage'
 import { SettingsPage } from './pages/SettingsPage'
-import type { CartItem, RouteName, User } from './types'
+import { PaymentPanel } from './components/PaymentPanel'
+import type { CartItem, RouteName, UserAccount } from './types'
 
-const validRoutes: RouteName[] = [
-  'dashboard', 'services', 'checkout', 'activities',
-  'analytics', 'cashbox', 'settings',
+const routes: RouteName[] = [
+  'dashboard','services','activities','analytics','cashbox','settings',
 ]
 
-function getRoute(): RouteName {
-  const value = window.location.hash.replace('#/', '') as RouteName
-  return validRoutes.includes(value) ? value : 'dashboard'
-}
-
-function Splash() {
-  return (
-    <div className="splash-screen">
-      <div className="splash-orb one" /><div className="splash-orb two" />
-      <div className="splash-card">
-        <div className="splash-logo">FH</div>
-        <h1>فیروزه، خوش آمدید</h1>
-        <p>سامانه داخلی در حال آماده‌سازی است…</p>
-        <div className="splash-progress"><i /></div>
-      </div>
-    </div>
-  )
+function readLocation(): { route: RouteName; query: URLSearchParams } {
+  const raw = window.location.hash.replace(/^#\/?/, '')
+  const [routePart = '', queryPart = ''] = raw.split('?')
+  const route = routes.includes(routePart as RouteName)
+    ? routePart as RouteName : 'dashboard'
+  return { route, query: new URLSearchParams(queryPart) }
 }
 
 export default function App() {
   const [ready, setReady] = useState(false)
-  const [minimumSplash, setMinimumSplash] = useState(false)
-  const [needsSetup, setNeedsSetup] = useState(false)
-  const [user, setUser] = useState<User>()
-  const [route, setRoute] = useState<RouteName>(getRoute)
-  const [revision, setRevision] = useState(0)
+  const [user, setUser] = useState<UserAccount>()
+  const [location, setLocation] = useState(readLocation)
+  const [cart, setCart] = useState<CartItem[]>([])
   const [cartOpen, setCartOpen] = useState(false)
-  const [cart, setCartState] = useState<CartItem[]>(() => {
-    try { return JSON.parse(localStorage.getItem('firouzeh-cart-v080') ?? '[]') as CartItem[] }
-    catch { return [] }
-  })
+  const [checkoutOpen, setCheckoutOpen] = useState(false)
+  const [revision, setRevision] = useState(0)
 
-  const setCart = useCallback((items: CartItem[]) => {
-    setCartState(items)
-    localStorage.setItem('firouzeh-cart-v080', JSON.stringify(items))
+  useEffect(() => {
+    applyTheme(loadTheme())
+    ensureDatabase()
+      .then(currentUser)
+      .then((value) => {
+        setUser(value)
+        setReady(true)
+        if (value) go(value.role === 'manager' ? 'dashboard' : 'services')
+      })
   }, [])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setMinimumSplash(true), 1100)
-    ensureSeedData().then(async () => {
-      applyTheme(await getTheme())
-      setNeedsSetup(!(await hasUsers()))
-      setUser(await restoreAuthSession())
-      setReady(true)
-    })
-    return () => window.clearTimeout(timer)
-  }, [])
-
-  useEffect(() => {
-    const listener = () => setRoute(getRoute())
+    const listener = () => setLocation(readLocation())
     window.addEventListener('hashchange', listener)
     return () => window.removeEventListener('hashchange', listener)
   }, [])
 
-  useEffect(() => {
-    if (!user) return
-    const managerRoutes: RouteName[] = ['dashboard', 'services', 'checkout', 'activities', 'analytics', 'cashbox', 'settings']
-    const staffRoutes: RouteName[] = ['services', 'checkout', 'cashbox']
-    const allowed = user.role === 'manager' ? managerRoutes : staffRoutes
-    if (!allowed.includes(route)) navigate(user.role === 'manager' ? 'dashboard' : 'services')
-  }, [route, user])
+  const changed = useCallback(() => setRevision((value) => value + 1), [])
 
-  const onChanged = useCallback(() => setRevision((value) => value + 1), [])
+  const handleAuthenticated = (value: UserAccount) => {
+    setUser(value)
+    go(value.role === 'manager' ? 'dashboard' : 'services')
+  }
+
+  const handleLogout = () => {
+    logout()
+    setUser(undefined)
+    setCart([])
+    window.location.hash = ''
+  }
+
+  const route = user?.role === 'employee' && location.route !== 'services'
+    ? 'services' : location.route
 
   const page = useMemo(() => {
     if (!user) return null
-    if (route === 'services') return <ServicesPage cart={cart} setCart={setCart} onOpenCart={() => setCartOpen(true)} />
-    if (route === 'checkout') return <CheckoutPage cart={cart} setCart={setCart} user={user} />
-    if (route === 'cashbox') return <CashboxPage user={user} revision={revision} onChanged={onChanged} />
-    if (route === 'dashboard' && user.role === 'manager') return <DashboardPage revision={revision} />
-    if (route === 'activities' && user.role === 'manager') return <ActivitiesPage user={user} revision={revision} onChanged={onChanged} />
-    if (route === 'analytics' && user.role === 'manager') return <AnalyticsPage revision={revision} />
-    if (route === 'settings' && user.role === 'manager') return <SettingsPage currentUser={user} revision={revision} onChanged={onChanged} />
-    return null
-  }, [cart, onChanged, revision, route, setCart, user])
+    switch (route) {
+      case 'dashboard':
+        return <DashboardPage revision={revision}/>
+      case 'services':
+        return <ServicesPage user={user} cart={cart} setCart={setCart}
+          revision={revision} onChanged={changed} onOpenCart={() => setCartOpen(true)}
+          onOpenCheckout={() => setCheckoutOpen(true)}/>
+      case 'activities':
+        return <ActivitiesPage user={user} revision={revision} onChanged={changed}/>
+      case 'analytics':
+        return <AnalyticsPage revision={revision}/>
+      case 'cashbox':
+        return <CashboxPage user={user} revision={revision} onChanged={changed}/>
+      case 'settings':
+        return <SettingsPage user={user} revision={revision} onChanged={changed}
+          initialTab={location.query.get('tab') ?? undefined}/>
+    }
+  }, [cart, changed, location.query, revision, route, user])
 
-  if (!ready || !minimumSplash) return <Splash />
-  if (!user) return <AuthPage needsSetup={needsSetup} onAuthenticated={(next) => {
-    setUser(next)
-    setNeedsSetup(false)
-    navigate(next.role === 'manager' ? 'dashboard' : 'services')
-  }} />
+  if (!ready) {
+    return <div className="splash"><div className="splash-logo">FH</div>
+      <h1>فیروزه، خوش آمدید</h1><p>پنل در حال آماده‌سازی است…</p><i/></div>
+  }
+  if (!user) return <AuthPage onAuthenticated={handleAuthenticated}/>
+
+  const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0)
 
   return (
     <>
-      <Layout
-        user={user}
-        route={route}
-        cartCount={cart.reduce((sum, item) => sum + item.quantity, 0)}
-        onOpenCart={() => setCartOpen(true)}
-        onLogout={() => { clearAuthSession(); setUser(undefined); setCartOpen(false) }}
-      >
+      <Layout route={route} user={user} cartCount={cartCount}
+        onCart={() => setCartOpen(true)} onLogout={handleLogout}>
         {page}
       </Layout>
-      <CartModal open={cartOpen} cart={cart} setCart={setCart} onClose={() => setCartOpen(false)} />
+      <CartModal open={cartOpen} cart={cart} onClose={() => setCartOpen(false)}
+        onUpdate={setCart} onCheckout={() => {
+          setCartOpen(false)
+          setCheckoutOpen(true)
+        }}/>
+      <Modal open={checkoutOpen} title="پرداخت" onClose={() => setCheckoutOpen(false)}
+        className="checkout-modal">
+        <PaymentPanel cart={cart} user={user} revision={revision} compact
+          onSuccess={() => {
+            setCart([])
+            setCheckoutOpen(false)
+            changed()
+          }}/>
+      </Modal>
     </>
   )
 }

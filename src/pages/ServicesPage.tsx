@@ -1,181 +1,226 @@
-import { Lock, Plus, Search, ShoppingCart } from 'lucide-react'
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { db, getOpenSession } from '../db'
-import { euroInput, parseEuro } from '../lib/format'
-import type { CartItem, CashSession, Service, ServiceCategory } from '../types'
-import { Card, Modal, Money, PageHeader, Toast } from '../components/UI'
+import {
+  useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction,
+} from 'react'
+import { Card, Icon, Modal, Money, PageHeader, Segmented, SmartMoneyInput, Toast } from '../components/ui'
+import { PaymentPanel } from '../components/PaymentPanel'
+import { db, getOpenShift } from '../db'
+import { moneyInputValue, parseMoney, uid } from '../lib/format'
+import type {
+  CartItem, SalonService, ServiceCategory, UserAccount,
+} from '../types'
+import { go } from '../components/Layout'
 
 export function ServicesPage({
-  cart, setCart, onOpenCart,
+  user, cart, setCart, revision, onChanged, onOpenCart, onOpenCheckout,
 }: {
+  user: UserAccount
   cart: CartItem[]
-  setCart: (items: CartItem[]) => void
+  setCart: Dispatch<SetStateAction<CartItem[]>>
+  revision: number
+  onChanged: () => void
   onOpenCart: () => void
+  onOpenCheckout: () => void
 }) {
   const [categories, setCategories] = useState<ServiceCategory[]>([])
-  const [services, setServices] = useState<Service[]>([])
-  const [session, setSession] = useState<CashSession>()
+  const [services, setServices] = useState<SalonService[]>([])
   const [category, setCategory] = useState('all')
-  const [query, setQuery] = useState('')
-  const [variableTarget, setVariableTarget] = useState<Service | null>(null)
-  const [variablePrice, setVariablePrice] = useState('')
-  const [customOpen, setCustomOpen] = useState(false)
-  const [customName, setCustomName] = useState('خدمات اضافه')
-  const [customPrice, setCustomPrice] = useState('')
+  const [shiftOpen, setShiftOpen] = useState(false)
+  const [priceTarget, setPriceTarget] = useState<SalonService>()
+  const [priceValue, setPriceValue] = useState('')
+  const [extraOpen, setExtraOpen] = useState(false)
+  const [extraName, setExtraName] = useState('خدمات اضافه')
+  const [extraPrice, setExtraPrice] = useState('')
   const [toast, setToast] = useState('')
 
-  const load = async () => {
-    const [categoryRows, serviceRows, open] = await Promise.all([
-      db.serviceCategories.orderBy('order').toArray(),
-      db.services.toArray(),
-      getOpenSession(),
+  const load = useCallback(async () => {
+    const [categoryItems, serviceItems, shift] = await Promise.all([
+      db.serviceCategories.orderBy('sortOrder').toArray(),
+      db.services.orderBy('sortOrder').toArray(),
+      getOpenShift(),
     ])
-    setCategories(categoryRows.filter((item) => item.active))
-    setServices(serviceRows.filter((item) => item.active))
-    setSession(open)
-  }
+    setCategories(categoryItems.filter((item) => item.active))
+    setServices(serviceItems.filter((item) => item.active))
+    setShiftOpen(Boolean(shift))
+  }, [])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load, revision])
 
-  const visible = useMemo(() => services.filter((service) => {
-    const categoryMatch = category === 'all' || service.categoryId === category
-    const queryMatch = service.name.toLowerCase().includes(query.toLowerCase())
-    return categoryMatch && queryMatch
-  }), [category, query, services])
+  const visible = useMemo(() => services.filter((item) =>
+    category === 'all' || item.categoryId === category), [category, services])
 
-  const addItem = (service: Service, unitPriceCents = service.priceCents) => {
-    const existing = cart.find((item) => item.serviceId === service.id && !item.custom)
-    if (existing) {
-      setCart(cart.map((item) => item.id === existing.id
-        ? { ...item, quantity: item.quantity + 1 }
-        : item))
-    } else {
-      setCart([...cart, {
-        id: crypto.randomUUID(),
+  const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0)
+  const cartTotal = cart.reduce(
+    (sum, item) => sum + item.quantity * item.unitPriceCents, 0)
+
+  const append = (service: SalonService, priceCents = service.priceCents) => {
+    setCart((current) => {
+      const existing = current.find((item) =>
+        item.serviceId === service.id && item.unitPriceCents === priceCents)
+      if (existing) {
+        return current.map((item) => item.cartId === existing.cartId
+          ? { ...item, quantity: item.quantity + 1 } : item)
+      }
+      return [...current, {
+        cartId: uid('cart'),
         serviceId: service.id,
         categoryId: service.categoryId,
         name: service.name,
-        basePriceCents: service.priceCents,
-        unitPriceCents,
         quantity: 1,
-        custom: false,
-      }])
+        unitPriceCents: priceCents,
+        defaultPriceCents: service.priceCents,
+        pricingMode: service.pricingMode,
+      }]
+    })
+    setToast('به سبد خدمات اضافه شد.')
+  }
+
+  const chooseService = (service: SalonService) => {
+    if (!shiftOpen) {
+      setToast('برای ورود خدمات ابتدا شیفت را باز کنید.')
+      return
     }
-    setToast('به سبد اضافه شد.')
-  }
-
-  const chooseService = (service: Service) => {
-    if (!session) return
-    if (service.priceMode === 'from') {
-      setVariableTarget(service)
-      setVariablePrice(euroInput(service.priceCents))
-    } else {
-      addItem(service)
+    if (service.pricingMode === 'from') {
+      setPriceTarget(service)
+      setPriceValue(moneyInputValue(service.priceCents))
+      return
     }
+    append(service)
   }
 
-  const submitVariable = (event: FormEvent) => {
-    event.preventDefault()
-    if (!variableTarget) return
-    addItem(variableTarget, parseEuro(variablePrice))
-    setVariableTarget(null)
-  }
-
-  const submitCustom = (event: FormEvent) => {
-    event.preventDefault()
-    const price = parseEuro(customPrice)
+  const addVariable = () => {
+    if (!priceTarget) return
+    const price = parseMoney(priceValue)
     if (price <= 0) return
-    setCart([...cart, {
-      id: crypto.randomUUID(),
-      name: customName.trim() || 'خدمات اضافه',
-      basePriceCents: price,
-      unitPriceCents: price,
+    append(priceTarget, price)
+    setPriceTarget(undefined)
+  }
+
+  const addExtra = () => {
+    const price = parseMoney(extraPrice)
+    if (price <= 0) return
+    setCart((current) => [...current, {
+      cartId: uid('cart'),
+      name: extraName.trim() || 'خدمات اضافه',
       quantity: 1,
-      custom: true,
+      unitPriceCents: price,
+      defaultPriceCents: price,
+      pricingMode: 'manual',
     }])
-    setCustomOpen(false)
-    setCustomName('خدمات اضافه')
-    setCustomPrice('')
-    setToast('خدمت اضافه وارد سبد شد.')
+    setExtraName('خدمات اضافه')
+    setExtraPrice('')
+    setExtraOpen(false)
+    setToast('خدمات اضافه به سبد اضافه شد.')
   }
 
   return (
     <>
-      <PageHeader
-        title="خدمات"
-        subtitle="خدمت موردنظر را انتخاب کن و در سبد قیمت نهایی را بررسی کن."
+      <PageHeader title="خدمات" subtitle="خدمت موردنظر را انتخاب و عملیات را ثبت کنید."
         action={
-          <button className="cart-button" type="button" onClick={onOpenCart}>
-            <ShoppingCart size={21} />
-            <span>مشاهده سبد</span>
-            {cart.length > 0 && <b>{cart.reduce((sum, item) => sum + item.quantity, 0)}</b>}
+          <button className="button primary cart-header-button" type="button" onClick={onOpenCart}>
+            <Icon name="cart"/>سبد
+            {cartCount > 0 && <b className="inline-count numeric">{cartCount}</b>}
           </button>
-        }
-      />
+        }/>
 
-      {!session && (
+      {!shiftOpen && (
         <div className="notice warning">
-          <Lock size={20} />
-          <strong>برای ورود خدمات ابتدا باید شیفت را باز کنید.</strong>
+          <Icon name="wallet"/>
+          <div><strong>شیفت بسته است.</strong><span>برای ورود خدمات ابتدا شیفت را باز کنید.</span></div>
+          {user.role === 'manager' && (
+            <button type="button" onClick={() => go('cashbox')}>باز کردن شیفت</button>
+          )}
         </div>
       )}
 
-      <div className="services-toolbar">
-        <div className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجوی خدمات" /></div>
-        <div className="category-scroll">
-          <button className={category === 'all' ? 'active' : ''} onClick={() => setCategory('all')} type="button">همه</button>
-          {categories.map((item) => (
-            <button key={item.id} className={category === item.id ? 'active' : ''} onClick={() => setCategory(item.id)} type="button">{item.name}</button>
-          ))}
-        </div>
-      </div>
-
-      <div className="service-grid">
-        <button
-          className="service-card custom-service-card"
-          type="button"
-          onClick={() => session && setCustomOpen(true)}
-          disabled={!session}
-        >
-          <Plus size={27} />
-          <strong>خدمات اضافه</strong>
-          <span>ورود دستی مبلغ</span>
-        </button>
-
-        {visible.map((service) => (
-          <button
-            key={service.id}
-            className="service-card"
-            type="button"
-            onClick={() => chooseService(service)}
-            disabled={!session}
-          >
-            <strong>{service.name}</strong>
-            <b>{service.priceMode === 'from' && <small>از </small>}<Money cents={service.priceCents} /></b>
-          </button>
-        ))}
-      </div>
-
-      <Modal open={Boolean(variableTarget)} title="تعیین قیمت این خدمت" onClose={() => setVariableTarget(null)}>
-        <form className="modal-form" onSubmit={submitVariable}>
-          <div className="selected-service-summary">
-            <strong>{variableTarget?.name}</strong>
-            <span>قیمت پایه: {variableTarget && <Money cents={variableTarget.priceCents} />}</span>
+      <div className="services-layout">
+        <div className="services-main">
+          <div className="service-toolbar">
+            <button className="extra-service-fixed" type="button"
+              disabled={!shiftOpen} onClick={() => setExtraOpen(true)}>
+              <Icon name="plus"/><span>خدمات اضافه</span>
+            </button>
+            <Segmented
+              value={category}
+              onChange={setCategory}
+              items={[
+                { value: 'all', label: 'همه' },
+                ...categories.map((item) => ({ value: item.id, label: item.name })),
+              ]}
+            />
           </div>
-          <label><span>قیمت نهایی این خدمت</span><input className="input input-large" type="number" min="0" step="0.01" dir="ltr" value={variablePrice} onChange={(event) => setVariablePrice(event.target.value)} autoFocus required /></label>
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setVariableTarget(null)}>انصراف</button><button className="primary-button" type="submit">افزودن به سبد</button></div>
-        </form>
+
+          <div className="services-grid">
+            {visible.map((service) => (
+              <button className="service-card" type="button" key={service.id}
+                disabled={!shiftOpen} onClick={() => chooseService(service)}>
+                <strong>{service.name}</strong>
+                <span>
+                  {service.pricingMode === 'from' && 'از '}
+                  <Money cents={service.priceCents}/>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <aside className="desktop-payment">
+          <PaymentPanel cart={cart} user={user} revision={revision}
+            onSuccess={() => {
+              setCart([])
+              onChanged()
+            }}/>
+        </aside>
+      </div>
+
+      <div className="mobile-payment-dock">
+        <button type="button" className="dock-cart" onClick={onOpenCart}>
+          <Icon name="cart"/><span className="numeric">{cartCount}</span>
+        </button>
+        <div><small>مجموع</small><strong><Money cents={cartTotal}/></strong></div>
+        <button type="button" className="button primary" disabled={!cart.length}
+          onClick={onOpenCheckout}>پرداخت</button>
+      </div>
+
+      <Modal open={Boolean(priceTarget)} title="تعیین قیمت این خدمت"
+        onClose={() => setPriceTarget(undefined)} className="small-modal">
+        {priceTarget && (
+          <div className="simple-form">
+            <div className="selected-service-summary">
+              <strong>{priceTarget.name}</strong>
+              <span>قیمت پایه: <Money cents={priceTarget.priceCents}/></span>
+            </div>
+            <label className="field"><span>قیمت نهایی این خدمت</span>
+              <SmartMoneyInput value={priceValue} onChange={setPriceValue}/></label>
+            <div className="modal-actions">
+              <button className="button secondary" type="button"
+                onClick={() => setPriceTarget(undefined)}>انصراف</button>
+              <button className="button primary" type="button" onClick={addVariable}>
+                <Icon name="plus"/>افزودن به سبد
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
 
-      <Modal open={customOpen} title="خدمات اضافه" onClose={() => setCustomOpen(false)}>
-        <form className="modal-form" onSubmit={submitCustom}>
-          <label><span>عنوان خدمت</span><input className="input" value={customName} onChange={(event) => setCustomName(event.target.value)} /></label>
-          <label><span>قیمت</span><input className="input input-large" type="number" min="0" step="0.01" dir="ltr" value={customPrice} onChange={(event) => setCustomPrice(event.target.value)} autoFocus required /></label>
-          <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setCustomOpen(false)}>انصراف</button><button className="primary-button" type="submit">افزودن به سبد</button></div>
-        </form>
+      <Modal open={extraOpen} title="خدمات اضافه" onClose={() => setExtraOpen(false)}
+        className="small-modal">
+        <div className="simple-form">
+          <label className="field"><span>عنوان خدمت</span>
+            <input className="input" value={extraName}
+              onChange={(event) => setExtraName(event.target.value)}/></label>
+          <label className="field"><span>قیمت خدمت</span>
+            <SmartMoneyInput value={extraPrice} onChange={setExtraPrice}/></label>
+          <div className="modal-actions">
+            <button className="button secondary" type="button"
+              onClick={() => setExtraOpen(false)}>انصراف</button>
+            <button className="button primary" type="button" onClick={addExtra}>
+              <Icon name="plus"/>افزودن به سبد
+            </button>
+          </div>
+        </div>
       </Modal>
 
-      {toast && <Toast message={toast} onDone={() => setToast('')} />}
+      {toast && <Toast message={toast} onDone={() => setToast('')}/>}
     </>
   )
 }

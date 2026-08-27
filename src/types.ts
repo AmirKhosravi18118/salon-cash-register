@@ -1,104 +1,112 @@
-export type Role = 'manager' | 'staff'
+export type Role = 'manager' | 'employee'
 export type RouteName =
-  | 'dashboard' | 'services' | 'checkout' | 'activities'
+  | 'dashboard' | 'services' | 'activities'
   | 'analytics' | 'cashbox' | 'settings'
 
-export type PriceMode = 'fixed' | 'from'
-export type MovementKind =
-  | 'service' | 'expense' | 'deposit' | 'withdrawal'
-  | 'bank' | 'refund' | 'adjustment'
+export type PricingMode = 'fixed' | 'from'
+export type TransactionDirection = 'in' | 'out'
+export type TransactionKind =
+  | 'service' | 'extra-service' | 'expense'
+  | 'deposit' | 'bank-deposit' | 'withdrawal'
+  | 'refund' | 'adjustment'
 
-export interface User {
+export interface UserAccount {
   id: string
-  displayName: string
+  name: string
   username: string
   passwordHash: string
-  salt: string
+  passwordSalt: string
   role: Role
   active: boolean
   createdAt: string
+  lastLoginAt?: string
 }
 
 export interface ServiceCategory {
   id: string
   name: string
-  order: number
   active: boolean
-}
-
-export interface Service {
-  id: string
-  categoryId: string
-  name: string
-  durationMinutes: number
-  priceCents: number
-  priceMode: PriceMode
-  active: boolean
-  createdAt: string
-  updatedAt: string
+  sortOrder: number
 }
 
 export interface ExpenseCategory {
   id: string
   name: string
-  order: number
   active: boolean
+  sortOrder: number
+}
+
+export interface SalonService {
+  id: string
+  categoryId: string
+  name: string
+  duration: string
+  priceCents: number
+  pricingMode: PricingMode
+  active: boolean
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
 }
 
 export interface CartItem {
-  id: string
+  cartId: string
   serviceId?: string
   categoryId?: string
   name: string
-  basePriceCents: number
-  unitPriceCents: number
   quantity: number
-  custom: boolean
+  unitPriceCents: number
+  defaultPriceCents: number
+  pricingMode: PricingMode | 'manual'
 }
 
 export interface TransactionItem {
   serviceId?: string
   categoryId?: string
   name: string
-  basePriceCents: number
-  unitPriceCents: number
   quantity: number
+  unitPriceCents: number
   totalCents: number
-  custom: boolean
 }
 
 export interface CashTransaction {
   id: string
   sequence: string
-  kind: MovementKind
+  kind: TransactionKind
+  direction: TransactionDirection
   amountCents: number
-  cashEffectCents: number
+  serviceSubtotalCents: number
+  taxIncludedCents: number
   tipCents: number
-  categoryId?: string
-  categoryName: string
   note: string
+  categoryId?: string
+  categoryName?: string
   items: TransactionItem[]
-  sessionId?: string
+  shiftId?: string
   userId: string
   userName: string
   createdAt: string
 }
 
-export interface CashSession {
+export interface WorkShift {
   id: string
   status: 'open' | 'closed'
   openedAt: string
-  closedAt?: string
   openedByUserId: string
   openedByName: string
+  openingBalanceCents: number
+  closedAt?: string
   closedByUserId?: string
   closedByName?: string
-  openingSystemCents: number
-  openingCountedCents: number
-  closingExpectedCents?: number
-  closingCountedCents?: number
+  expectedClosingCents?: number
+  countedClosingCents?: number
   differenceCents?: number
   shiftChangeCents?: number
+}
+
+export interface AppSetting {
+  key: string
+  value: string
 }
 
 export interface ThemeSettings {
@@ -108,18 +116,28 @@ export interface ThemeSettings {
   surface: string
   text: string
   muted: string
-  sidebar: string
   success: string
   danger: string
+  sidebar: string
   radius: number
   shadow: number
   blur: number
   surfaceOpacity: number
   backgroundImage: string
-  backgroundOpacity: number
+  backgroundImageOpacity: number
 }
 
-export interface AppSetting {
-  key: string
-  value: string
+export interface DashboardData {
+  cashBalanceCents: number
+  openShift?: WorkShift
+  monthServiceCents: number
+  monthTipCents: number
+  monthExpenseCents: number
+  monthNetCents: number
+  recentTransactions: CashTransaction[]
+}
+
+export interface AuthSession {
+  userId: string
+  createdAt: string
 }

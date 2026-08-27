@@ -1,74 +1,94 @@
-import { ArrowLeft, Minus, Plus, ShoppingCart, Trash2 } from 'lucide-react'
+import { useState } from 'react'
 import type { CartItem } from '../types'
-import { euroInput, parseEuro } from '../lib/format'
-import { Modal, Money } from './UI'
-import { navigate } from './Layout'
+import { formatMoney, moneyInputValue, parseMoney } from '../lib/format'
+import { Icon, Modal, Money, SmartMoneyInput } from './ui'
+
+
+function CartPriceEditor({
+  item, onCommit,
+}: {
+  item: CartItem
+  onCommit: (cents: number) => void
+}) {
+  const [value, setValue] = useState(moneyInputValue(item.unitPriceCents))
+  return (
+    <SmartMoneyInput
+      value={value}
+      onChange={(next) => {
+        setValue(next)
+        onCommit(parseMoney(next))
+      }}
+      ariaLabel={`قیمت ${item.name}`}
+    />
+  )
+}
 
 export function CartModal({
-  open, cart, setCart, onClose,
+  open, cart, onClose, onUpdate, onCheckout,
 }: {
   open: boolean
   cart: CartItem[]
-  setCart: (cart: CartItem[]) => void
   onClose: () => void
+  onUpdate: (cart: CartItem[]) => void
+  onCheckout: () => void
 }) {
-  const total = cart.reduce((sum, item) => sum + item.unitPriceCents * item.quantity, 0)
+  const subtotal = cart.reduce(
+    (sum, item) => sum + item.unitPriceCents * item.quantity, 0)
 
-  const update = (id: string, patch: Partial<CartItem>) => {
-    setCart(cart.map((item) => item.id === id ? { ...item, ...patch } : item))
+  const patch = (cartId: string, changes: Partial<CartItem>) => {
+    onUpdate(cart.map((item) => item.cartId === cartId ? { ...item, ...changes } : item))
   }
 
-  const quantity = (id: string, delta: number) => {
-    setCart(cart
-      .map((item) => item.id === id ? { ...item, quantity: item.quantity + delta } : item)
-      .filter((item) => item.quantity > 0))
-  }
+  const remove = (cartId: string) => onUpdate(cart.filter((item) => item.cartId !== cartId))
 
   return (
-    <Modal open={open} title="سبد خدمات" onClose={onClose} wide>
+    <Modal open={open} title="سبد خدمات" onClose={onClose} className="cart-modal">
       {!cart.length ? (
-        <div className="empty-cart"><ShoppingCart size={34} /><p>هنوز خدمتی انتخاب نشده است.</p></div>
+        <div className="empty-cart"><Icon name="cart" size={34}/><p>هنوز خدمتی انتخاب نشده است.</p></div>
       ) : (
-        <div className="cart-modal-content">
-          <div className="cart-item-list">
+        <>
+          <div className="cart-list">
             {cart.map((item) => (
-              <article className="cart-item" key={item.id}>
-                <div className="cart-item-title">
+              <article className="cart-item" key={item.cartId}>
+                <div className="cart-item-name">
                   <strong>{item.name}</strong>
-                  <span>قیمت پیش‌فرض: <Money cents={item.basePriceCents} /></span>
+                  <small>قیمت پیش‌فرض: <span className="numeric">{formatMoney(item.defaultPriceCents)}</span></small>
                 </div>
-                <label className="cart-price-field">
+
+                <label className="cart-price">
                   <span>قیمت واحد</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    dir="ltr"
-                    value={euroInput(item.unitPriceCents)}
-                    onChange={(event) => update(item.id, { unitPriceCents: parseEuro(event.target.value) })}
-                  />
+                  <CartPriceEditor item={item} onCommit={(cents) =>
+                    patch(item.cartId, { unitPriceCents: cents })} />
                 </label>
-                <div className="quantity-box">
-                  <button type="button" onClick={() => quantity(item.id, -1)}><Minus size={16} /></button>
-                  <span>{item.quantity}</span>
-                  <button type="button" onClick={() => quantity(item.id, 1)}><Plus size={16} /></button>
+
+                <div className="quantity-control" aria-label="تعداد">
+                  <button type="button" onClick={() => patch(item.cartId, {
+                    quantity: Math.max(1, item.quantity - 1),
+                  })}><Icon name="minus" size={17}/></button>
+                  <b className="numeric">{item.quantity}</b>
+                  <button type="button" onClick={() => patch(item.cartId, {
+                    quantity: item.quantity + 1,
+                  })}><Icon name="plus" size={17}/></button>
                 </div>
-                <strong className="cart-line-total"><Money cents={item.unitPriceCents * item.quantity} /></strong>
-                <button className="icon-button danger" type="button" onClick={() => setCart(cart.filter((entry) => entry.id !== item.id))}><Trash2 size={18} /></button>
+
+                <strong className="cart-line-total"><Money cents={item.unitPriceCents * item.quantity}/></strong>
+
+                <button className="icon-button danger-soft" type="button"
+                  onClick={() => remove(item.cartId)} aria-label="حذف">
+                  <Icon name="trash" size={18}/>
+                </button>
               </article>
             ))}
           </div>
-          <div className="cart-footer">
-            <div><span>مجموع خدمات</span><strong><Money cents={total} /></strong></div>
-            <button
-              className="primary-button checkout-button"
-              type="button"
-              onClick={() => { onClose(); navigate('checkout') }}
-            >
-              ادامه و پرداخت — <Money cents={total} /><ArrowLeft size={19} />
+
+          <footer className="cart-footer">
+            <div><span>مجموع خدمات</span><strong><Money cents={subtotal}/></strong></div>
+            <button className="button primary full" type="button" onClick={onCheckout}>
+              ادامه و پرداخت — <span className="numeric">{formatMoney(subtotal)}</span>
+              <Icon name="back"/>
             </button>
-          </div>
-        </div>
+          </footer>
+        </>
       )}
     </Modal>
   )

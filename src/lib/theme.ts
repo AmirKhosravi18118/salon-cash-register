@@ -1,60 +1,62 @@
-import { defaultTheme } from '../data'
 import type { ThemeSettings } from '../types'
 
-function hexToRgb(hex: string): string {
-  const normalized = hex.replace('#', '')
-  const value = Number.parseInt(normalized.length === 3
-    ? normalized.split('').map((part) => part + part).join('')
-    : normalized, 16)
-  return `${(value >> 16) & 255}, ${(value >> 8) & 255}, ${value & 255}`
+const STORAGE_KEY = 'firouzeh-theme-v090'
+
+export const defaultTheme: ThemeSettings = {
+  primary: '#2d0b83',
+  secondary: '#eeb0c3',
+  background: '#f4ece7',
+  surface: '#fffaf6',
+  text: '#3c2a26',
+  muted: '#82706a',
+  success: '#3f805f',
+  danger: '#b44755',
+  sidebar: '#4a332e',
+  radius: 22,
+  shadow: 18,
+  blur: 18,
+  surfaceOpacity: 88,
+  backgroundImage: '',
+  backgroundImageOpacity: 24,
 }
 
-export function applyTheme(theme: ThemeSettings): void {
-  const root = document.documentElement
-  root.style.setProperty('--primary', theme.primary)
-  root.style.setProperty('--primary-rgb', hexToRgb(theme.primary))
-  root.style.setProperty('--secondary', theme.secondary)
-  root.style.setProperty('--secondary-rgb', hexToRgb(theme.secondary))
-  root.style.setProperty('--background', theme.background)
-  root.style.setProperty('--surface-rgb', hexToRgb(theme.surface))
-  root.style.setProperty('--text', theme.text)
-  root.style.setProperty('--muted', theme.muted)
-  root.style.setProperty('--sidebar', theme.sidebar)
-  root.style.setProperty('--success', theme.success)
-  root.style.setProperty('--danger', theme.danger)
-  root.style.setProperty('--radius', `${theme.radius}px`)
-  root.style.setProperty('--shadow-strength', String(theme.shadow / 100))
-  root.style.setProperty('--glass-blur', `${theme.blur}px`)
-  root.style.setProperty('--surface-opacity', String(theme.surfaceOpacity / 100))
-  root.style.setProperty('--background-opacity', String(theme.backgroundOpacity / 100))
-  root.style.setProperty(
-    '--background-image',
-    theme.backgroundImage ? `url("${theme.backgroundImage}")` : 'none',
-  )
+export function loadTheme(): ThemeSettings {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY)
+    return stored ? { ...defaultTheme, ...JSON.parse(stored) } as ThemeSettings : defaultTheme
+  } catch {
+    return defaultTheme
+  }
+}
+
+export function saveTheme(theme: ThemeSettings): void {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(theme))
+  applyTheme(theme)
 }
 
 export function resetTheme(): ThemeSettings {
-  return { ...defaultTheme }
+  localStorage.removeItem(STORAGE_KEY)
+  applyTheme(defaultTheme)
+  return defaultTheme
 }
 
-export async function compressBackground(file: File): Promise<string> {
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const value = new Image()
-    value.onload = () => resolve(value)
-    value.onerror = reject
-    value.src = dataUrl
-  })
-  const maxWidth = 1800
-  const scale = Math.min(1, maxWidth / image.width)
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.round(image.width * scale)
-  canvas.height = Math.round(image.height * scale)
-  canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height)
-  return canvas.toDataURL('image/jpeg', 0.78)
+export function applyTheme(theme: ThemeSettings): void {
+  const style = document.documentElement.style
+  style.setProperty('--primary', theme.primary)
+  style.setProperty('--secondary', theme.secondary)
+  style.setProperty('--page-bg', theme.background)
+  style.setProperty('--surface-color', theme.surface)
+  style.setProperty('--text', theme.text)
+  style.setProperty('--muted', theme.muted)
+  style.setProperty('--success', theme.success)
+  style.setProperty('--danger', theme.danger)
+  style.setProperty('--sidebar-color', theme.sidebar)
+  style.setProperty('--radius-card', `${theme.radius}px`)
+  style.setProperty('--shadow-strength', `${Math.max(0, theme.shadow) / 100}`)
+  style.setProperty('--glass-blur', `${theme.blur}px`)
+  style.setProperty('--surface-opacity', `${Math.min(100, Math.max(20, theme.surfaceOpacity))}%`)
+  style.setProperty('--background-image-opacity',
+    `${Math.min(100, Math.max(0, theme.backgroundImageOpacity)) / 100}`)
+  style.setProperty('--custom-background-image',
+    theme.backgroundImage ? `url("${theme.backgroundImage}")` : 'none')
 }

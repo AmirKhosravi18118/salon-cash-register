@@ -1,259 +1,325 @@
 import Dexie, { type EntityTable } from 'dexie'
-import { defaultTheme, initialExpenseCategories, initialServiceCategories, initialServices } from './data'
+import { starterExpenseCategories, starterServiceCategories, starterServices } from './data'
+import { calculateIncludedTax, localMonthKey, uid } from './lib/format'
 import type {
-  AppSetting, CashSession, CashTransaction, ExpenseCategory,
-  MovementKind, Service, ServiceCategory, ThemeSettings, TransactionItem, User,
+  AppSetting, CartItem, CashTransaction, DashboardData, ExpenseCategory,
+  SalonService, ServiceCategory, TransactionDirection, TransactionItem,
+  TransactionKind, UserAccount, WorkShift,
 } from './types'
 
-class FirouzehDB extends Dexie {
-  users!: EntityTable<User, 'id'>
+class FirouzehDatabase extends Dexie {
+  users!: EntityTable<UserAccount, 'id'>
   serviceCategories!: EntityTable<ServiceCategory, 'id'>
-  services!: EntityTable<Service, 'id'>
+  services!: EntityTable<SalonService, 'id'>
   expenseCategories!: EntityTable<ExpenseCategory, 'id'>
   transactions!: EntityTable<CashTransaction, 'id'>
-  sessions!: EntityTable<CashSession, 'id'>
+  shifts!: EntityTable<WorkShift, 'id'>
   settings!: EntityTable<AppSetting, 'key'>
 
   constructor() {
-    super('firouzeh-salon-v080')
+    super('firouzeh-salon-v090')
     this.version(1).stores({
       users: '&id, &username, role, active, createdAt',
-      serviceCategories: '&id, name, order, active',
-      services: '&id, categoryId, name, active, updatedAt',
-      expenseCategories: '&id, name, order, active',
-      transactions: '&id, sequence, kind, createdAt, sessionId, userId, categoryId',
-      sessions: '&id, status, openedAt, closedAt',
+      serviceCategories: '&id, name, active, sortOrder',
+      services: '&id, categoryId, active, sortOrder, updatedAt',
+      expenseCategories: '&id, name, active, sortOrder',
+      transactions: '&id, sequence, kind, direction, createdAt, shiftId, userId, categoryId',
+      shifts: '&id, status, openedAt',
       settings: '&key',
     })
   }
 }
 
-export const db = new FirouzehDB()
-const uid = () => crypto.randomUUID()
+export const db = new FirouzehDatabase()
+
 const nowIso = () => new Date().toISOString()
 
-export async function ensureSeedData(): Promise<void> {
-  if (!(await db.serviceCategories.count())) {
-    await db.serviceCategories.bulkPut(initialServiceCategories)
+export async function ensureDatabase(): Promise<void> {
+  if (!await db.serviceCategories.count()) {
+    await db.serviceCategories.bulkAdd(starterServiceCategories)
   }
-  if (!(await db.services.count())) {
-    await db.services.bulkPut(initialServices)
+  if (!await db.services.count()) {
+    await db.services.bulkAdd(starterServices)
   }
-  if (!(await db.expenseCategories.count())) {
-    await db.expenseCategories.bulkPut(initialExpenseCategories)
+  if (!await db.expenseCategories.count()) {
+    await db.expenseCategories.bulkAdd(starterExpenseCategories)
   }
-  await db.settings.bulkPut([
-    { key: 'appVersion', value: '0.8.0-test' },
-    { key: 'salonName', value: 'Firouzeh_hair_beauty' },
-  ])
-  if (!(await db.settings.get('theme'))) {
-    await db.settings.put({ key: 'theme', value: JSON.stringify(defaultTheme) })
+  if (!await db.settings.get('cashBalanceCents')) {
+    await db.settings.put({ key: 'cashBalanceCents', value: '0' })
   }
-  if (!(await db.settings.get('sequence'))) {
+  if (!await db.settings.get('sequence')) {
     await db.settings.put({ key: 'sequence', value: '0' })
   }
+  await db.settings.put({ key: 'appVersion', value: '0.9.0-test' })
 }
 
-export async function getTheme(): Promise<ThemeSettings> {
-  const setting = await db.settings.get('theme')
-  if (!setting) return defaultTheme
-  try {
-    return { ...defaultTheme, ...JSON.parse(setting.value) as Partial<ThemeSettings> }
-  } catch {
-    return defaultTheme
-  }
+export async function getCashBalance(): Promise<number> {
+  return Number((await db.settings.get('cashBalanceCents'))?.value ?? 0)
 }
 
-export async function saveTheme(theme: ThemeSettings): Promise<void> {
-  await db.settings.put({ key: 'theme', value: JSON.stringify(theme) })
+async function setCashBalance(value: number): Promise<void> {
+  await db.settings.put({ key: 'cashBalanceCents', value: String(Math.round(value)) })
 }
 
-export async function hasUsers(): Promise<boolean> {
-  return (await db.users.count()) > 0
+export async function getOpenShift(): Promise<WorkShift | undefined> {
+  return db.shifts.where('status').equals('open').first()
 }
 
-export async function getOpenSession(): Promise<CashSession | undefined> {
-  return db.sessions.where('status').equals('open').first()
-}
-
-export async function cashBalance(): Promise<number> {
-  const transactions = await db.transactions.toArray()
-  return transactions.reduce((sum, transaction) => sum + transaction.cashEffectCents, 0)
-}
-
-async function nextSequence(): Promise<string> {
-  let sequence = ''
-  await db.transaction('rw', db.settings, async () => {
-    const current = Number((await db.settings.get('sequence'))?.value ?? 0)
-    const next = current + 1
-    await db.settings.put({ key: 'sequence', value: String(next) })
-    sequence = `${new Date().getFullYear()}-${String(next).padStart(6, '0')}`
-  })
-  return sequence
-}
-
-interface AddTransactionInput {
-  kind: MovementKind
-  amountCents: number
-  cashEffectCents: number
-  tipCents?: number
-  categoryId?: string
-  categoryName?: string
-  note?: string
-  items?: TransactionItem[]
-  sessionId?: string
-  user: User
-}
-
-export async function addTransaction(input: AddTransactionInput): Promise<CashTransaction> {
-  const transaction: CashTransaction = {
-    id: uid(),
-    sequence: await nextSequence(),
-    kind: input.kind,
-    amountCents: Math.abs(input.amountCents),
-    cashEffectCents: input.cashEffectCents,
-    tipCents: input.tipCents ?? 0,
-    categoryId: input.categoryId,
-    categoryName: input.categoryName ?? '',
-    note: input.note ?? '',
-    items: input.items ?? [],
-    sessionId: input.sessionId,
-    userId: input.user.id,
-    userName: input.user.displayName,
-    createdAt: nowIso(),
-  }
-  await db.transactions.add(transaction)
-  return transaction
-}
-
-export async function openShift(countedBalanceCents: number, user: User): Promise<CashSession> {
-  const existing = await getOpenSession()
+export async function openShift(user: UserAccount, initialBalance?: number): Promise<WorkShift> {
+  const existing = await getOpenShift()
   if (existing) return existing
 
-  const systemBalance = await cashBalance()
-  const difference = countedBalanceCents - systemBalance
-  const session: CashSession = {
-    id: uid(),
+  const shiftCount = await db.shifts.count()
+  let cashBalance = await getCashBalance()
+  if (shiftCount === 0 && await db.transactions.count() === 0 && initialBalance !== undefined) {
+    cashBalance = Math.max(0, Math.round(initialBalance))
+    await setCashBalance(cashBalance)
+  }
+
+  const shift: WorkShift = {
+    id: uid('shift'),
     status: 'open',
     openedAt: nowIso(),
     openedByUserId: user.id,
-    openedByName: user.displayName,
-    openingSystemCents: systemBalance,
-    openingCountedCents: countedBalanceCents,
+    openedByName: user.name,
+    openingBalanceCents: cashBalance,
   }
-
-  await db.sessions.add(session)
-  if (difference !== 0) {
-    await addTransaction({
-      kind: 'adjustment',
-      amountCents: Math.abs(difference),
-      cashEffectCents: difference,
-      categoryName: 'اصلاح موجودی ابتدای شیفت',
-      note: 'تطبیق موجودی شمارش‌شده با موجودی سیستم',
-      sessionId: session.id,
-      user,
-    })
-  }
-  return session
+  await db.shifts.add(shift)
+  return shift
 }
 
-export async function closeShift(countedBalanceCents: number, user: User): Promise<CashSession> {
-  const session = await getOpenSession()
-  if (!session) throw new Error('NO_OPEN_SESSION')
+export async function closeShift(
+  user: UserAccount,
+  countedBalanceCents: number,
+): Promise<WorkShift> {
+  const shift = await getOpenShift()
+  if (!shift) throw new Error('NO_OPEN_SHIFT')
 
-  const expectedBeforeAdjustment = await cashBalance()
-  const difference = countedBalanceCents - expectedBeforeAdjustment
+  const expected = await getCashBalance()
+  const counted = Math.max(0, Math.round(countedBalanceCents))
+  const difference = counted - expected
+  const closedAt = nowIso()
 
-  if (difference !== 0) {
-    await addTransaction({
-      kind: 'adjustment',
-      amountCents: Math.abs(difference),
-      cashEffectCents: difference,
-      categoryName: 'اصلاح موجودی پایان شیفت',
-      note: 'تطبیق موجودی شمارش‌شده پایان شیفت',
-      sessionId: session.id,
-      user,
-    })
-  }
-
-  const closed: CashSession = {
-    ...session,
+  const closed: WorkShift = {
+    ...shift,
     status: 'closed',
-    closedAt: nowIso(),
+    closedAt,
     closedByUserId: user.id,
-    closedByName: user.displayName,
-    closingExpectedCents: expectedBeforeAdjustment,
-    closingCountedCents: countedBalanceCents,
+    closedByName: user.name,
+    expectedClosingCents: expected,
+    countedClosingCents: counted,
     differenceCents: difference,
-    shiftChangeCents: countedBalanceCents - session.openingCountedCents,
+    shiftChangeCents: counted - shift.openingBalanceCents,
   }
-  await db.sessions.put(closed)
+
+  await db.transaction('rw', db.shifts, db.settings, db.transactions, async () => {
+    await db.shifts.put(closed)
+    if (difference !== 0) {
+      await addTransactionInside({
+        kind: 'adjustment',
+        direction: difference >= 0 ? 'in' : 'out',
+        amountCents: Math.abs(difference),
+        serviceSubtotalCents: 0,
+        taxIncludedCents: 0,
+        tipCents: 0,
+        note: 'اصلاح اختلاف پایان شیفت',
+        items: [],
+        categoryName: 'اصلاح موجودی',
+        user,
+        shiftId: shift.id,
+        updateBalance: false,
+      })
+    }
+    await setCashBalance(counted)
+  })
+
   return closed
 }
 
-export async function saveServiceOperation(input: {
-  items: TransactionItem[]
+interface TransactionInput {
+  kind: TransactionKind
+  direction: TransactionDirection
+  amountCents: number
+  serviceSubtotalCents?: number
+  taxIncludedCents?: number
+  tipCents?: number
+  note?: string
+  categoryId?: string
+  categoryName?: string
+  items?: TransactionItem[]
+  user: UserAccount
+  shiftId?: string
+  updateBalance?: boolean
+}
+
+async function nextSequence(): Promise<string> {
+  const current = Number((await db.settings.get('sequence'))?.value ?? 0)
+  const next = current + 1
+  await db.settings.put({ key: 'sequence', value: String(next) })
+  return `${new Date().getFullYear()}-${String(next).padStart(6, '0')}`
+}
+
+async function addTransactionInside(input: TransactionInput): Promise<CashTransaction> {
+  const amount = Math.max(0, Math.round(input.amountCents))
+  const transaction: CashTransaction = {
+    id: uid('transaction'),
+    sequence: await nextSequence(),
+    kind: input.kind,
+    direction: input.direction,
+    amountCents: amount,
+    serviceSubtotalCents: input.serviceSubtotalCents ?? 0,
+    taxIncludedCents: input.taxIncludedCents ?? 0,
+    tipCents: input.tipCents ?? 0,
+    note: input.note?.trim() ?? '',
+    categoryId: input.categoryId,
+    categoryName: input.categoryName,
+    items: input.items ?? [],
+    shiftId: input.shiftId,
+    userId: input.user.id,
+    userName: input.user.name,
+    createdAt: nowIso(),
+  }
+  await db.transactions.add(transaction)
+
+  if (input.updateBalance !== false) {
+    const current = await getCashBalance()
+    await setCashBalance(
+      input.direction === 'in' ? current + amount : Math.max(0, current - amount),
+    )
+  }
+  return transaction
+}
+
+export async function addTransaction(input: TransactionInput): Promise<CashTransaction> {
+  let saved!: CashTransaction
+  await db.transaction('rw', db.transactions, db.settings, async () => {
+    saved = await addTransactionInside(input)
+  })
+  return saved
+}
+
+export async function recordServicePayment(input: {
+  cart: CartItem[]
   tipCents: number
-  user: User
+  user: UserAccount
+  receivedCents: number
 }): Promise<CashTransaction> {
-  const session = await getOpenSession()
-  if (!session) throw new Error('NO_OPEN_SESSION')
-  const servicesTotal = input.items.reduce((sum, item) => sum + item.totalCents, 0)
+  const shift = await getOpenShift()
+  if (!shift) throw new Error('SHIFT_CLOSED')
+
+  const items: TransactionItem[] = input.cart.map((item) => ({
+    serviceId: item.serviceId,
+    categoryId: item.categoryId,
+    name: item.name,
+    quantity: item.quantity,
+    unitPriceCents: item.unitPriceCents,
+    totalCents: item.unitPriceCents * item.quantity,
+  }))
+  const subtotal = items.reduce((sum, item) => sum + item.totalCents, 0)
+  const tip = Math.max(0, input.tipCents)
+  const total = subtotal + tip
+  if (!items.length || input.receivedCents < total) throw new Error('INVALID_PAYMENT')
+
   return addTransaction({
-    kind: 'service',
-    amountCents: servicesTotal + input.tipCents,
-    cashEffectCents: servicesTotal + input.tipCents,
-    tipCents: input.tipCents,
-    categoryName: 'خدمات',
-    items: input.items,
-    sessionId: session.id,
+    kind: items.every((item) => !item.serviceId) ? 'extra-service' : 'service',
+    direction: 'in',
+    amountCents: total,
+    serviceSubtotalCents: subtotal,
+    taxIncludedCents: calculateIncludedTax(subtotal),
+    tipCents: tip,
+    items,
     user: input.user,
+    shiftId: shift.id,
   })
 }
 
-export async function saveMovement(input: {
-  kind: Exclude<MovementKind, 'service'>
+export async function recordActivity(input: {
+  direction: TransactionDirection
+  kind: TransactionKind
   amountCents: number
   categoryId?: string
-  categoryName: string
+  categoryName?: string
   note: string
-  user: User
+  user: UserAccount
 }): Promise<CashTransaction> {
-  const session = await getOpenSession()
-  if (!session) throw new Error('NO_OPEN_SESSION')
-  const incoming = input.kind === 'deposit' || input.kind === 'adjustment'
+  const shift = await getOpenShift()
   return addTransaction({
     ...input,
-    cashEffectCents: incoming ? input.amountCents : -input.amountCents,
-    sessionId: session.id,
+    serviceSubtotalCents: 0,
+    taxIncludedCents: 0,
+    tipCents: 0,
+    items: [],
+    shiftId: shift?.id,
   })
 }
 
-export async function deleteService(serviceId: string): Promise<void> {
-  await db.services.delete(serviceId)
+export async function dashboardData(): Promise<DashboardData> {
+  const [cashBalanceCents, openShiftValue, transactions] = await Promise.all([
+    getCashBalance(),
+    getOpenShift(),
+    db.transactions.orderBy('createdAt').reverse().toArray(),
+  ])
+  const month = localMonthKey()
+  const monthItems = transactions.filter((item) =>
+    localMonthKey(new Date(item.createdAt)) === month)
+
+  const monthServiceCents = monthItems
+    .filter((item) => item.kind === 'service' || item.kind === 'extra-service')
+    .reduce((sum, item) => sum + item.serviceSubtotalCents, 0)
+  const monthTipCents = monthItems.reduce((sum, item) => sum + item.tipCents, 0)
+  const monthExpenseCents = monthItems
+    .filter((item) => item.direction === 'out')
+    .reduce((sum, item) => sum + item.amountCents, 0)
+  const monthNetCents = monthItems.reduce(
+    (sum, item) => sum + (item.direction === 'in' ? item.amountCents : -item.amountCents), 0)
+
+  return {
+    cashBalanceCents,
+    openShift: openShiftValue,
+    monthServiceCents,
+    monthTipCents,
+    monthExpenseCents,
+    monthNetCents,
+    recentTransactions: transactions.slice(0, 6),
+  }
 }
 
-export async function deleteServiceCategory(categoryId: string): Promise<void> {
-  const used = await db.services.where('categoryId').equals(categoryId).count()
-  if (used) throw new Error('CATEGORY_NOT_EMPTY')
-  await db.serviceCategories.delete(categoryId)
+export async function saveService(value: SalonService): Promise<void> {
+  await db.services.put({ ...value, updatedAt: nowIso() })
 }
 
-export async function deleteExpenseCategory(categoryId: string): Promise<void> {
-  await db.expenseCategories.delete(categoryId)
+export async function saveServiceCategory(value: ServiceCategory): Promise<void> {
+  await db.serviceCategories.put(value)
 }
 
-export async function exportAllData(): Promise<string> {
-  const data = {
-    version: '0.8.0-test',
+export async function saveExpenseCategory(value: ExpenseCategory): Promise<void> {
+  await db.expenseCategories.put(value)
+}
+
+export async function deleteService(id: string): Promise<void> {
+  await db.services.delete(id)
+}
+
+export async function deleteServiceCategory(id: string): Promise<void> {
+  const used = await db.services.where('categoryId').equals(id).count()
+  if (used) throw new Error('CATEGORY_IN_USE')
+  await db.serviceCategories.delete(id)
+}
+
+export async function deleteExpenseCategory(id: string): Promise<void> {
+  await db.expenseCategories.delete(id)
+}
+
+export async function exportDatabase(): Promise<string> {
+  return JSON.stringify({
+    version: '0.9.0-test',
     exportedAt: nowIso(),
     users: await db.users.toArray(),
     serviceCategories: await db.serviceCategories.toArray(),
     services: await db.services.toArray(),
     expenseCategories: await db.expenseCategories.toArray(),
     transactions: await db.transactions.toArray(),
-    sessions: await db.sessions.toArray(),
+    shifts: await db.shifts.toArray(),
     settings: await db.settings.toArray(),
-  }
-  return JSON.stringify(data, null, 2)
+  }, null, 2)
 }

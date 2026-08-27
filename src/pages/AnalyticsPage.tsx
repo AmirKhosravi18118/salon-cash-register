@@ -1,166 +1,210 @@
-import { BarChart3, CalendarRange, TrendingDown, TrendingUp } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
-import { Card, Money, PageHeader } from '../components/UI'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { Card, Icon, Money, PageHeader, Segmented } from '../components/ui'
 import { db } from '../db'
-import { dateRangeFromPreset, dayKey, formatDate } from '../lib/format'
-import type { CashSession, CashTransaction, ExpenseCategory, ServiceCategory, User } from '../types'
+import { formatDate, formatInteger, formatTime, localMonthKey, monthNames } from '../lib/format'
+import type {
+  CashTransaction, ExpenseCategory, ServiceCategory, UserAccount, WorkShift,
+} from '../types'
 
 export function AnalyticsPage({ revision }: { revision: number }) {
-  const initial = dateRangeFromPreset('month')
-  const [preset, setPreset] = useState('month')
-  const [from, setFrom] = useState(initial.from)
-  const [to, setTo] = useState(initial.to)
+  const current = localMonthKey()
+  const [scope, setScope] = useState('month')
+  const [year, setYear] = useState(Number(current.slice(0, 4)))
+  const [month, setMonth] = useState(Number(current.slice(5, 7)))
   const [serviceCategory, setServiceCategory] = useState('all')
   const [expenseCategory, setExpenseCategory] = useState('all')
   const [userId, setUserId] = useState('all')
   const [transactions, setTransactions] = useState<CashTransaction[]>([])
-  const [sessions, setSessions] = useState<CashSession[]>([])
+  const [shifts, setShifts] = useState<WorkShift[]>([])
   const [serviceCategories, setServiceCategories] = useState<ServiceCategory[]>([])
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
-  const [users, setUsers] = useState<User[]>([])
+  const [users, setUsers] = useState<UserAccount[]>([])
 
-  useEffect(() => {
-    Promise.all([
+  const load = useCallback(async () => {
+    const [tx, shiftItems, serviceCats, expenseCats, accountItems] = await Promise.all([
       db.transactions.orderBy('createdAt').toArray(),
-      db.sessions.orderBy('openedAt').toArray(),
-      db.serviceCategories.orderBy('order').toArray(),
-      db.expenseCategories.orderBy('order').toArray(),
+      db.shifts.orderBy('openedAt').reverse().toArray(),
+      db.serviceCategories.orderBy('sortOrder').toArray(),
+      db.expenseCategories.orderBy('sortOrder').toArray(),
       db.users.toArray(),
-    ]).then(([tx, shifts, serviceCats, expenseCats, userRows]) => {
-      setTransactions(tx)
-      setSessions(shifts)
-      setServiceCategories(serviceCats)
-      setExpenseCategories(expenseCats)
-      setUsers(userRows)
+    ])
+    setTransactions(tx)
+    setShifts(shiftItems)
+    setServiceCategories(serviceCats)
+    setExpenseCategories(expenseCats)
+    setUsers(accountItems)
+  }, [])
+
+  useEffect(() => { load() }, [load, revision])
+
+  const inPeriod = (value: string) => {
+    const date = new Date(value)
+    return date.getFullYear() === year
+      && (scope === 'year' || date.getMonth() + 1 === month)
+  }
+
+  const filtered = transactions.filter((item) => {
+    if (!inPeriod(item.createdAt)) return false
+    if (userId !== 'all' && item.userId !== userId) return false
+    if (serviceCategory !== 'all' && item.items.length
+      && !item.items.some((entry) => entry.categoryId === serviceCategory)) return false
+    if (expenseCategory !== 'all' && item.direction === 'out'
+      && item.categoryId !== expenseCategory) return false
+    return true
+  })
+
+  const income = filtered.filter((item) => item.direction === 'in')
+    .reduce((sum, item) => sum + item.amountCents, 0)
+  const outcome = filtered.filter((item) => item.direction === 'out')
+    .reduce((sum, item) => sum + item.amountCents, 0)
+  const serviceValue = filtered.reduce(
+    (sum, item) => sum + item.serviceSubtotalCents, 0)
+  const tipValue = filtered.reduce((sum, item) => sum + item.tipCents, 0)
+
+  const daily = useMemo(() => {
+    const map = new Map<string, { incoming: number; outgoing: number }>()
+    filtered.forEach((item) => {
+      const date = new Date(item.createdAt)
+      const key = `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+      const value = map.get(key) ?? { incoming: 0, outgoing: 0 }
+      if (item.direction === 'in') value.incoming += item.amountCents
+      else value.outgoing += item.amountCents
+      map.set(key, value)
     })
-  }, [revision])
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [filtered])
+  const maxDaily = Math.max(1, ...daily.flatMap(([, item]) => [item.incoming, item.outgoing]))
 
-  const setRange = (value: string) => {
-    setPreset(value)
-    const range = dateRangeFromPreset(value)
-    setFrom(range.from)
-    setTo(range.to)
-  }
+  const expenseSummary = useMemo(() => {
+    const map = new Map<string, number>()
+    filtered.filter((item) => item.direction === 'out').forEach((item) => {
+      const name = item.categoryName || 'بدون کتگوری'
+      map.set(name, (map.get(name) ?? 0) + item.amountCents)
+    })
+    return [...map.entries()].sort((a, b) => b[1] - a[1])
+  }, [filtered])
+  const maxExpense = Math.max(1, ...expenseSummary.map(([, value]) => value))
 
-  const filtered = useMemo(() => transactions.filter((item) => {
-    const date = dayKey(item.createdAt)
-    const dateMatch = (!from || date >= from) && (!to || date <= to)
-    const userMatch = userId === 'all' || item.userId === userId
-    const serviceMatch = serviceCategory === 'all'
-      || item.items.some((entry) => entry.categoryId === serviceCategory)
-    const expenseMatch = expenseCategory === 'all'
-      || item.kind !== 'expense'
-      || item.categoryId === expenseCategory
-    return dateMatch && userMatch && serviceMatch && expenseMatch
-  }), [expenseCategory, from, serviceCategory, to, transactions, userId])
-
-  const filteredSessions = sessions.filter((item) => {
-    const date = dayKey(item.openedAt)
-    return (!from || date >= from) && (!to || date <= to)
-  })
-
-  const incoming = filtered.reduce((sum, item) => sum + Math.max(item.cashEffectCents, 0), 0)
-  const outgoing = filtered.reduce((sum, item) => sum + Math.abs(Math.min(item.cashEffectCents, 0)), 0)
-  const serviceTotal = filtered.filter((item) => item.kind === 'service').reduce((sum, item) => sum + item.amountCents - item.tipCents, 0)
-  const tips = filtered.reduce((sum, item) => sum + item.tipCents, 0)
-
-  const daily = new Map<string, { incoming: number; outgoing: number }>()
-  for (const item of filtered) {
-    const key = dayKey(item.createdAt)
-    const current = daily.get(key) ?? { incoming: 0, outgoing: 0 }
-    if (item.cashEffectCents >= 0) current.incoming += item.cashEffectCents
-    else current.outgoing += Math.abs(item.cashEffectCents)
-    daily.set(key, current)
-  }
-  const dailyRows = [...daily.entries()].sort(([a], [b]) => a.localeCompare(b))
-  const maxDaily = Math.max(...dailyRows.flatMap(([, value]) => [value.incoming, value.outgoing]), 1)
-
-  const expenseSummary = new Map<string, number>()
-  filtered.filter((item) => item.kind === 'expense').forEach((item) => {
-    expenseSummary.set(item.categoryName, (expenseSummary.get(item.categoryName) ?? 0) + item.amountCents)
-  })
+  const selectedShifts = shifts.filter((shift) => inPeriod(shift.openedAt))
 
   return (
     <>
-      <PageHeader title="تحلیل داده‌ها" subtitle="فیلتر و مقایسه ورودی، خروجی، خدمات و شیفت‌ها" />
+      <PageHeader title="تحلیل داده‌ها" subtitle="بررسی ورودی، خروجی، خدمات، هزینه‌ها و شیفت‌ها"/>
 
       <Card className="analytics-filters">
-        <div className="preset-scroll">
-          {[
-            ['today', 'امروز'], ['week', 'هفته'], ['month', 'ماه'],
-            ['year', 'سال'], ['custom', 'دلخواه'],
-          ].map(([value, label]) => (
-            <button key={value} className={preset === value ? 'active' : ''} onClick={() => setRange(value)} type="button">{label}</button>
-          ))}
+        <div className="filter-top">
+          <Segmented value={scope} onChange={setScope}
+            items={[{ value: 'month', label: 'ماهانه' }, { value: 'year', label: 'سالانه' }]}/>
+          <div className="month-filters">
+            <label><span>سال</span>
+              <select className="input numeric" dir="ltr" value={year}
+                onChange={(event) => setYear(Number(event.target.value))}>
+                {[year - 2, year - 1, year, year + 1].map((value) =>
+                  <option key={value} value={value}>{value}</option>)}
+              </select>
+            </label>
+            {scope === 'month' && <label><span>ماه</span>
+              <select className="input" value={month}
+                onChange={(event) => setMonth(Number(event.target.value))}>
+                {monthNames.map((name, index) =>
+                  <option key={name} value={index + 1}>{name}</option>)}
+              </select>
+            </label>}
+          </div>
         </div>
         <div className="filter-grid">
-          <label><span>از تاریخ</span><input type="date" value={from} onChange={(event) => { setPreset('custom'); setFrom(event.target.value) }} /></label>
-          <label><span>تا تاریخ</span><input type="date" value={to} onChange={(event) => { setPreset('custom'); setTo(event.target.value) }} /></label>
-          <label><span>کتگوری خدمات</span><select value={serviceCategory} onChange={(event) => setServiceCategory(event.target.value)}><option value="all">همه</option>{serviceCategories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <label><span>کتگوری هزینه</span><select value={expenseCategory} onChange={(event) => setExpenseCategory(event.target.value)}><option value="all">همه</option>{expenseCategories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <label><span>کاربر</span><select value={userId} onChange={(event) => setUserId(event.target.value)}><option value="all">همه</option>{users.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select></label>
+          <label><span>کتگوری خدمات</span>
+            <select className="input" value={serviceCategory}
+              onChange={(event) => setServiceCategory(event.target.value)}>
+              <option value="all">همه خدمات</option>
+              {serviceCategories.map((item) =>
+                <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select></label>
+          <label><span>کتگوری هزینه</span>
+            <select className="input" value={expenseCategory}
+              onChange={(event) => setExpenseCategory(event.target.value)}>
+              <option value="all">همه هزینه‌ها</option>
+              {expenseCategories.map((item) =>
+                <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select></label>
+          <label><span>کاربر</span>
+            <select className="input" value={userId}
+              onChange={(event) => setUserId(event.target.value)}>
+              <option value="all">همه کاربران</option>
+              {users.map((item) =>
+                <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select></label>
         </div>
       </Card>
 
-      <div className="metric-grid">
-        <Card className="metric-card"><div className="metric-icon green"><TrendingUp size={20} /></div><span>ورودی</span><strong><Money cents={incoming} /></strong></Card>
-        <Card className="metric-card"><div className="metric-icon red"><TrendingDown size={20} /></div><span>خروجی</span><strong><Money cents={outgoing} /></strong></Card>
-        <Card className="metric-card"><div className="metric-icon rose"><BarChart3 size={20} /></div><span>خدمات</span><strong><Money cents={serviceTotal} /></strong></Card>
-        <Card className="metric-card"><div className="metric-icon beige"><CalendarRange size={20} /></div><span>انعام</span><strong><Money cents={tips} /></strong></Card>
+      <div className="metric-grid analytics-metrics">
+        <Card className="metric"><span>ورودی</span><strong className="positive"><Money cents={income}/></strong></Card>
+        <Card className="metric"><span>خروجی</span><strong className="negative"><Money cents={outcome}/></strong></Card>
+        <Card className="metric"><span>خدمات</span><strong><Money cents={serviceValue}/></strong></Card>
+        <Card className="metric"><span>انعام</span><strong><Money cents={tipValue}/></strong></Card>
       </div>
 
       <div className="analytics-grid">
-        <Card className="chart-card">
-          <div className="section-heading"><div><h2>ورودی و خروجی روزانه</h2><p>مقایسه براساس بازه انتخاب‌شده</p></div></div>
-          {!dailyRows.length ? <div className="empty-state">داده‌ای در این بازه وجود ندارد.</div> : (
-            <div className="bar-chart-scroll">
-              <div className="bar-chart" style={{ minWidth: `${Math.max(520, dailyRows.length * 72)}px` }}>
-                {dailyRows.map(([date, value]) => (
-                  <div className="daily-bar" key={date}>
-                    <div className="bar-pair">
-                      <i className="income" style={{ height: `${Math.max(3, value.incoming / maxDaily * 150)}px` }} title={`ورودی ${value.incoming / 100}`} />
-                      <i className="outcome" style={{ height: `${Math.max(3, value.outgoing / maxDaily * 150)}px` }} title={`خروجی ${value.outgoing / 100}`} />
+        <Card className="chart-card flow-chart-card">
+          <div className="panel-heading"><div><h2>ورودی و خروجی روزانه</h2><p>مقایسه در بازه انتخاب‌شده</p></div><Icon name="chart"/></div>
+          {!daily.length ? <div className="chart-empty">داده‌ای در بازه انتخاب‌شده وجود ندارد.</div> : (
+            <div className="flow-chart-scroll">
+              <div className="flow-chart">
+                {daily.map(([date, value]) => (
+                  <div className="flow-column" key={date}>
+                    <div className="flow-bars">
+                      <i className="bar out" style={{ '--bar-height': `${value.outgoing / maxDaily * 100}%` } as CSSProperties}/>
+                      <i className="bar in" style={{ '--bar-height': `${value.incoming / maxDaily * 100}%` } as CSSProperties}/>
                     </div>
-                    <span>{date.slice(5)}</span>
+                    <span className="numeric">{date}</span>
                   </div>
                 ))}
               </div>
             </div>
           )}
-          <div className="chart-legend"><span><i className="income" />ورودی</span><span><i className="outcome" />خروجی</span></div>
+          <div className="chart-legend"><span><i className="legend in"/>ورودی</span><span><i className="legend out"/>خروجی</span></div>
         </Card>
 
-        <Card>
-          <div className="section-heading"><div><h2>تحلیل هزینه‌ها</h2><p>جمع براساس کتگوری</p></div></div>
-          <div className="summary-list">
-            {[...expenseSummary.entries()].sort((a, b) => b[1] - a[1]).map(([name, value]) => (
-              <div key={name}><span>{name}</span><strong><Money cents={value} /></strong></div>
-            ))}
-            {!expenseSummary.size && <div className="empty-state">هزینه‌ای ثبت نشده است.</div>}
-          </div>
+        <Card className="chart-card expense-chart-card">
+          <div className="panel-heading"><div><h2>تحلیل هزینه‌ها</h2><p>جمع براساس کتگوری</p></div><Icon name="filter"/></div>
+          {!expenseSummary.length ? <div className="chart-empty">هزینه‌ای ثبت نشده است.</div> : (
+            <div className="expense-bars">
+              {expenseSummary.map(([name, value]) => (
+                <div className="expense-bar-row" key={name}>
+                  <div><span>{name}</span><Money cents={value}/></div>
+                  <i><b style={{ width: `${value / maxExpense * 100}%` }}/></i>
+                </div>
+              ))}
+            </div>
+          )}
         </Card>
       </div>
 
-      <Card className="shift-analysis">
-        <div className="section-heading"><div><h2>تحلیل شیفت‌ها</h2><p>زمان و موجودی باز و بسته‌شدن صندوق</p></div></div>
-        <div className="table-scroll">
-          <table>
-            <thead><tr><th>تاریخ</th><th>شروع</th><th>مبلغ شروع</th><th>پایان</th><th>مبلغ پایان</th><th>تغییر شیفت</th><th>کاربر</th></tr></thead>
-            <tbody>
-              {filteredSessions.map((item) => (
-                <tr key={item.id}>
-                  <td>{formatDate(item.openedAt, false)}</td>
-                  <td>{formatDate(item.openedAt)}</td>
-                  <td><Money cents={item.openingCountedCents} /></td>
-                  <td>{item.closedAt ? formatDate(item.closedAt) : 'باز'}</td>
-                  <td>{item.closingCountedCents === undefined ? '—' : <Money cents={item.closingCountedCents} />}</td>
-                  <td className={(item.shiftChangeCents ?? 0) >= 0 ? 'positive' : 'negative'}>{item.shiftChangeCents === undefined ? '—' : <Money cents={item.shiftChangeCents} signed />}</td>
-                  <td>{item.closedByName ?? item.openedByName}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <Card className="shift-analysis-card">
+        <div className="panel-heading"><div><h2>تحلیل شیفت‌ها</h2><p>زمان و موجودی باز و بسته‌شدن صندوق</p></div><Icon name="wallet"/></div>
+        {!selectedShifts.length ? <div className="chart-empty">شیفتی در بازه انتخاب‌شده وجود ندارد.</div> : (
+          <div className="responsive-table">
+            <div className="table-row header">
+              <span>تاریخ</span><span>شروع</span><span>موجودی شروع</span>
+              <span>پایان</span><span>موجودی پایان</span><span>تغییر شیفت</span>
+            </div>
+            {selectedShifts.map((shift) => (
+              <div className="table-row" key={shift.id}>
+                <span className="numeric">{formatDate(shift.openedAt, false)}</span>
+                <span className="numeric">{formatTime(shift.openedAt)}</span>
+                <Money cents={shift.openingBalanceCents}/>
+                <span className="numeric">{shift.closedAt ? formatTime(shift.closedAt) : '—'}</span>
+                <span>{shift.countedClosingCents === undefined ? '—' :
+                  <Money cents={shift.countedClosingCents}/>}</span>
+                <strong className={(shift.shiftChangeCents ?? 0) >= 0 ? 'positive' : 'negative'}>
+                  {shift.status === 'open' ? 'در حال انجام' :
+                    <Money cents={shift.shiftChangeCents ?? 0} signed/>}
+                </strong>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="shift-count">تعداد شیفت‌ها: <b className="numeric">{formatInteger(selectedShifts.length)}</b></p>
       </Card>
     </>
   )

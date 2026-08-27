@@ -1,70 +1,364 @@
 import {
-  Download, Edit3, FileSpreadsheet, Image, Palette, Plus,
-  RotateCcw, Save, Trash2, UserPlus, Users,
-} from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
-import { createUser, updateUserPassword } from '../auth'
-import { defaultTheme } from '../data'
+  useCallback, useEffect, useMemo, useState, type FormEvent,
+} from 'react'
+import { createUser, deleteUser, resetPassword, updateUser } from '../auth'
 import {
-  db, deleteExpenseCategory, deleteService, deleteServiceCategory,
-  getTheme, saveTheme,
+  deleteExpenseCategory, deleteService, deleteServiceCategory,
+  db, saveExpenseCategory, saveService, saveServiceCategory,
 } from '../db'
-import { downloadBackup, downloadExcel } from '../lib/export'
-import { compressBackground, applyTheme } from '../lib/theme'
-import { euroInput, parseEuro } from '../lib/format'
+import { downloadExcel, downloadJsonBackup } from '../lib/export'
+import { moneyInputValue, parseMoney, uid } from '../lib/format'
+import {
+  defaultTheme, loadTheme, resetTheme, saveTheme,
+} from '../lib/theme'
 import type {
-  ExpenseCategory, PriceMode, Service, ServiceCategory,
-  ThemeSettings, User,
+  ExpenseCategory, PricingMode, SalonService, ServiceCategory,
+  ThemeSettings, UserAccount,
 } from '../types'
-import { Card, ConfirmModal, Modal, Money, PageHeader, Toast } from '../components/UI'
+import {
+  Card, ConfirmModal, Icon, Modal, Money, PageHeader,
+  Segmented, SmartMoneyInput, Toast,
+} from '../components/ui'
 
-type Tab = 'services' | 'serviceCategories' | 'expenseCategories' | 'appearance' | 'users' | 'backup'
+type SettingsTab =
+  | 'services' | 'categories' | 'expenses'
+  | 'users' | 'appearance' | 'backup'
 
-export function SettingsPage({
-  currentUser, revision, onChanged,
-}: { currentUser: User; revision: number; onChanged: () => void }) {
-  const [tab, setTab] = useState<Tab>('services')
-  const [services, setServices] = useState<Service[]>([])
-  const [serviceCategories, setServiceCategories] = useState<ServiceCategory[]>([])
-  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
-  const [users, setUsers] = useState<User[]>([])
-  const [theme, setTheme] = useState<ThemeSettings>(defaultTheme)
-  const [serviceEditor, setServiceEditor] = useState<Service | null>(null)
-  const [serviceNew, setServiceNew] = useState(false)
-  const [categoryEditor, setCategoryEditor] = useState<ServiceCategory | null>(null)
-  const [expenseEditor, setExpenseEditor] = useState<ExpenseCategory | null>(null)
-  const [userEditor, setUserEditor] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<{ type: 'service' | 'category' | 'expense'; id: string; name: string } | null>(null)
-  const [toast, setToast] = useState('')
+const tabs = [
+  { value: 'services', label: 'خدمات' },
+  { value: 'categories', label: 'کتگوری خدمات' },
+  { value: 'expenses', label: 'کتگوری هزینه‌ها' },
+  { value: 'users', label: 'کاربران' },
+  { value: 'appearance', label: 'تغییر ظاهر' },
+  { value: 'backup', label: 'پشتیبان و خروجی' },
+]
 
-  const load = async () => {
-    const [serviceRows, categoryRows, expenseRows, userRows, themeValue] = await Promise.all([
-      db.services.orderBy('updatedAt').reverse().toArray(),
-      db.serviceCategories.orderBy('order').toArray(),
-      db.expenseCategories.orderBy('order').toArray(),
-      db.users.toArray(),
-      getTheme(),
-    ])
-    setServices(serviceRows)
-    setServiceCategories(categoryRows)
-    setExpenseCategories(expenseRows)
-    setUsers(userRows)
-    setTheme(themeValue)
+function ServiceForm({
+  service, categories, onClose, onSaved,
+}: {
+  service?: SalonService
+  categories: ServiceCategory[]
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [name, setName] = useState(service?.name ?? '')
+  const [categoryId, setCategoryId] = useState(service?.categoryId ?? categories[0]?.id ?? '')
+  const [duration, setDuration] = useState(service?.duration ?? '')
+  const [price, setPrice] = useState(service ? moneyInputValue(service.priceCents) : '')
+  const [pricingMode, setPricingMode] = useState<PricingMode>(service?.pricingMode ?? 'fixed')
+  const [active, setActive] = useState(service?.active ?? true)
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!name.trim() || !categoryId || parseMoney(price) <= 0) return
+    const now = new Date().toISOString()
+    await saveService({
+      id: service?.id ?? uid('service'),
+      name: name.trim(),
+      categoryId,
+      duration: duration.trim(),
+      priceCents: parseMoney(price),
+      pricingMode,
+      active,
+      sortOrder: service?.sortOrder ?? Date.now(),
+      createdAt: service?.createdAt ?? now,
+      updatedAt: now,
+    })
+    onSaved()
+    onClose()
   }
 
-  useEffect(() => { load() }, [revision])
+  return (
+    <form className="simple-form" onSubmit={submit}>
+      <label className="field"><span>نام خدمت</span>
+        <input className="input" value={name}
+          onChange={(event) => setName(event.target.value)} required/></label>
+      <div className="form-grid">
+        <label className="field"><span>کتگوری</span>
+          <select className="input" value={categoryId}
+            onChange={(event) => setCategoryId(event.target.value)} required>
+            {categories.map((item) =>
+              <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select></label>
+        <label className="field"><span>مدت</span>
+          <input className="input" value={duration}
+            onChange={(event) => setDuration(event.target.value)}
+            placeholder="مثلاً 1 Stunde"/></label>
+      </div>
+      <div className="form-grid">
+        <label className="field"><span>قیمت</span>
+          <SmartMoneyInput value={price} onChange={setPrice}/></label>
+        <label className="field"><span>نوع قیمت</span>
+          <select className="input" value={pricingMode}
+            onChange={(event) => setPricingMode(event.target.value as PricingMode)}>
+            <option value="fixed">قیمت ثابت</option>
+            <option value="from">از قیمت پایه</option>
+          </select></label>
+      </div>
+      <label className="switch-row">
+        <input type="checkbox" checked={active}
+          onChange={(event) => setActive(event.target.checked)}/>
+        <span>فعال باشد</span>
+      </label>
+      <div className="modal-actions">
+        <button className="button secondary" type="button" onClick={onClose}>انصراف</button>
+        <button className="button primary" type="submit"><Icon name="save"/>ذخیره</button>
+      </div>
+    </form>
+  )
+}
 
-  const createEmptyService = (): Service => ({
-    id: crypto.randomUUID(),
-    categoryId: serviceCategories[0]?.id ?? '',
-    name: '',
-    durationMinutes: 60,
-    priceCents: 0,
-    priceMode: 'fixed',
-    active: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  })
+function CategoryForm({
+  value, type, onClose, onSaved,
+}: {
+  value?: ServiceCategory | ExpenseCategory
+  type: 'service' | 'expense'
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [name, setName] = useState(value?.name ?? '')
+  const [active, setActive] = useState(value?.active ?? true)
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!name.trim()) return
+    const next = {
+      id: value?.id ?? uid(type === 'service' ? 'category' : 'expense-category'),
+      name: name.trim(), active,
+      sortOrder: value?.sortOrder ?? Date.now(),
+    }
+    if (type === 'service') await saveServiceCategory(next)
+    else await saveExpenseCategory(next)
+    onSaved()
+    onClose()
+  }
+  return (
+    <form className="simple-form" onSubmit={submit}>
+      <label className="field"><span>نام کتگوری</span>
+        <input className="input" value={name}
+          onChange={(event) => setName(event.target.value)} required/></label>
+      <label className="switch-row">
+        <input type="checkbox" checked={active}
+          onChange={(event) => setActive(event.target.checked)}/>
+        <span>فعال باشد</span>
+      </label>
+      <div className="modal-actions">
+        <button className="button secondary" type="button" onClick={onClose}>انصراف</button>
+        <button className="button primary" type="submit"><Icon name="save"/>ذخیره</button>
+      </div>
+    </form>
+  )
+}
+
+function EmployeeForm({
+  employee, onClose, onSaved, onDelete,
+}: {
+  employee?: UserAccount
+  onClose: () => void
+  onSaved: (temporaryPassword?: string) => void
+  onDelete?: () => void
+}) {
+  const [name, setName] = useState(employee?.name ?? '')
+  const [username, setUsername] = useState(employee?.username ?? '')
+  const [active, setActive] = useState(employee?.active ?? true)
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    setError('')
+    try {
+      if (employee) {
+        await updateUser({ id: employee.id, name, username, active })
+        if (password) await resetPassword(employee.id, password)
+        onSaved(password || undefined)
+      } else {
+        if (password.length < 6) {
+          setError('رمز عبور باید حداقل 6 کاراکتر باشد.')
+          return
+        }
+        await createUser({ name, username, password, role: 'employee' })
+        onSaved(password)
+      }
+      onClose()
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : ''
+      setError(message === 'USERNAME_EXISTS'
+        ? 'این نام کاربری قبلاً استفاده شده است.'
+        : 'اطلاعات حساب قابل ذخیره نیست.')
+    }
+  }
+
+  return (
+    <form className="simple-form" onSubmit={submit}>
+      <label className="field"><span>نام کارمند</span>
+        <input className="input" value={name}
+          onChange={(event) => setName(event.target.value)} required/></label>
+      <label className="field"><span>نام کاربری</span>
+        <input className="input numeric" dir="ltr" value={username}
+          onChange={(event) => setUsername(event.target.value)} required/></label>
+      <label className="field"><span>{employee ? 'رمز جدید؛ در صورت نیاز' : 'رمز عبور'}</span>
+        <div className="password-field">
+          <input className="input numeric" dir="ltr"
+            type={showPassword ? 'text' : 'password'} value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            minLength={employee ? undefined : 6}
+            required={!employee}/>
+          <button type="button" onClick={() => setShowPassword((value) => !value)}
+            aria-label="نمایش رمز"><Icon name="eye"/></button>
+        </div>
+      </label>
+      {employee && <p className="security-note">
+        رمز قبلی قابل نمایش نیست. برای تغییر دسترسی، رمز جدید تعیین کنید.
+      </p>}
+      <label className="switch-row">
+        <input type="checkbox" checked={active}
+          onChange={(event) => setActive(event.target.checked)}/>
+        <span>حساب فعال باشد</span>
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <div className="modal-actions employee-actions">
+        {employee && onDelete && (
+          <button className="button danger" type="button" onClick={onDelete}>
+            <Icon name="trash"/>حذف کارمند
+          </button>
+        )}
+        <button className="button secondary" type="button" onClick={onClose}>انصراف</button>
+        <button className="button primary" type="submit"><Icon name="save"/>ذخیره حساب</button>
+      </div>
+    </form>
+  )
+}
+
+function AppearancePanel() {
+  const [theme, setTheme] = useState<ThemeSettings>(loadTheme)
+
+  const patch = <K extends keyof ThemeSettings>(key: K, value: ThemeSettings[K]) => {
+    const next = { ...theme, [key]: value }
+    setTheme(next)
+    saveTheme(next)
+  }
+
+  const imageSelected = (file?: File) => {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => patch('backgroundImage', String(reader.result ?? ''))
+    reader.readAsDataURL(file)
+  }
+
+  const colors: Array<{ key: keyof ThemeSettings; label: string }> = [
+    { key: 'primary', label: 'رنگ اصلی دکمه‌ها' },
+    { key: 'secondary', label: 'رنگ مکمل' },
+    { key: 'background', label: 'پس‌زمینه اصلی' },
+    { key: 'surface', label: 'رنگ کارت‌ها' },
+    { key: 'text', label: 'رنگ متن' },
+    { key: 'muted', label: 'رنگ متن کم‌رنگ' },
+    { key: 'success', label: 'رنگ موفقیت' },
+    { key: 'danger', label: 'رنگ خطا و حذف' },
+    { key: 'sidebar', label: 'رنگ منوی کناری' },
+  ]
+
+  return (
+    <div className="appearance-panel">
+      <div className="appearance-preview">
+        <span>پیش‌نمایش</span>
+        <button className="button primary">دکمه اصلی</button>
+        <button className="button secondary">دکمه دوم</button>
+      </div>
+      <div className="color-grid">
+        {colors.map((item) => (
+          <label className="color-field" key={item.key}>
+            <span>{item.label}</span>
+            <input type="color" value={String(theme[item.key])}
+              onChange={(event) => patch(item.key, event.target.value as never)}/>
+          </label>
+        ))}
+      </div>
+      <div className="range-grid">
+        <label className="field"><span>گردی کارت‌ها: <b className="numeric">{theme.radius}px</b></span>
+          <input type="range" min="8" max="36" value={theme.radius}
+            onChange={(event) => patch('radius', Number(event.target.value))}/></label>
+        <label className="field"><span>قدرت سایه: <b className="numeric">{theme.shadow}%</b></span>
+          <input type="range" min="0" max="40" value={theme.shadow}
+            onChange={(event) => patch('shadow', Number(event.target.value))}/></label>
+        <label className="field"><span>تاری شیشه: <b className="numeric">{theme.blur}px</b></span>
+          <input type="range" min="0" max="36" value={theme.blur}
+            onChange={(event) => patch('blur', Number(event.target.value))}/></label>
+        <label className="field"><span>شفافیت کارت‌ها: <b className="numeric">{theme.surfaceOpacity}%</b></span>
+          <input type="range" min="35" max="100" value={theme.surfaceOpacity}
+            onChange={(event) => patch('surfaceOpacity', Number(event.target.value))}/></label>
+        <label className="field"><span>شدت تصویر پس‌زمینه: <b className="numeric">{theme.backgroundImageOpacity}%</b></span>
+          <input type="range" min="0" max="100" value={theme.backgroundImageOpacity}
+            onChange={(event) => patch('backgroundImageOpacity', Number(event.target.value))}/></label>
+      </div>
+      <div className="background-actions">
+        <label className="button secondary file-button"><Icon name="upload"/>انتخاب تصویر
+          <input type="file" accept="image/*"
+            onChange={(event) => imageSelected(event.target.files?.[0])}/></label>
+        <button className="button secondary" type="button"
+          onClick={() => patch('backgroundImage', '')}>حذف تصویر</button>
+        <button className="button danger" type="button" onClick={() => {
+          const next = resetTheme()
+          setTheme(next)
+        }}><Icon name="power"/>بازگشت به تم اصلی</button>
+      </div>
+    </div>
+  )
+}
+
+export function SettingsPage({
+  user, revision, onChanged, initialTab,
+}: {
+  user: UserAccount
+  revision: number
+  onChanged: () => void
+  initialTab?: string
+}) {
+  const [tab, setTab] = useState<SettingsTab>(
+    tabs.some((item) => item.value === initialTab)
+      ? initialTab as SettingsTab : 'services')
+  const [services, setServices] = useState<SalonService[]>([])
+  const [categories, setCategories] = useState<ServiceCategory[]>([])
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([])
+  const [users, setUsers] = useState<UserAccount[]>([])
+  const [serviceEditor, setServiceEditor] = useState<SalonService | 'new'>()
+  const [categoryEditor, setCategoryEditor] = useState<ServiceCategory | 'new'>()
+  const [expenseEditor, setExpenseEditor] = useState<ExpenseCategory | 'new'>()
+  const [employeeEditor, setEmployeeEditor] = useState<UserAccount | 'new'>()
+  const [deleteTarget, setDeleteTarget] = useState<{
+    type: 'service' | 'category' | 'expense' | 'user'
+    id: string
+    name: string
+  }>()
+  const [temporaryPassword, setTemporaryPassword] = useState('')
+  const [toast, setToast] = useState('')
+
+  useEffect(() => {
+    if (initialTab && tabs.some((item) => item.value === initialTab)) {
+      setTab(initialTab as SettingsTab)
+    }
+  }, [initialTab])
+
+  const load = useCallback(async () => {
+    const [serviceItems, categoryItems, expenseItems, userItems] = await Promise.all([
+      db.services.orderBy('sortOrder').toArray(),
+      db.serviceCategories.orderBy('sortOrder').toArray(),
+      db.expenseCategories.orderBy('sortOrder').toArray(),
+      db.users.orderBy('createdAt').toArray(),
+    ])
+    setServices(serviceItems)
+    setCategories(categoryItems)
+    setExpenseCategories(expenseItems)
+    setUsers(userItems)
+  }, [])
+
+  useEffect(() => { load() }, [load, revision])
+
+  const refreshed = async (message = 'تغییرات ذخیره شد.') => {
+    await load()
+    onChanged()
+    setToast(message)
+  }
 
   const remove = async () => {
     if (!deleteTarget) return
@@ -72,212 +366,217 @@ export function SettingsPage({
       if (deleteTarget.type === 'service') await deleteService(deleteTarget.id)
       if (deleteTarget.type === 'category') await deleteServiceCategory(deleteTarget.id)
       if (deleteTarget.type === 'expense') await deleteExpenseCategory(deleteTarget.id)
-      setToast('حذف شد.')
-      setDeleteTarget(null)
-      await load()
-      onChanged()
-    } catch {
-      setToast('این کتگوری دارای خدمت است و فعلاً قابل حذف نیست.')
-      setDeleteTarget(null)
+      if (deleteTarget.type === 'user') await deleteUser(deleteTarget.id)
+      setDeleteTarget(undefined)
+      await refreshed('مورد انتخاب‌شده حذف شد.')
+    } catch (cause) {
+      setDeleteTarget(undefined)
+      setToast(cause instanceof Error && cause.message === 'CATEGORY_IN_USE'
+        ? 'این کتگوری دارای خدمت است و قابل حذف نیست.'
+        : 'این مورد قابل حذف نیست.')
     }
   }
 
-  const updateTheme = <K extends keyof ThemeSettings>(key: K, value: ThemeSettings[K]) => {
-    const next = { ...theme, [key]: value }
-    setTheme(next)
-    applyTheme(next)
-  }
-
-  const persistTheme = async () => {
-    await saveTheme(theme)
-    setToast('ظاهر برنامه ذخیره شد.')
-    onChanged()
-  }
+  if (user.role !== 'manager') return null
 
   return (
     <>
-      <PageHeader title="تنظیمات" subtitle="مدیریت خدمات، کتگوری‌ها، کاربران، ظاهر و خروجی اطلاعات" />
+      <PageHeader title="تنظیمات" subtitle="مدیریت خدمات، کتگوری‌ها، کاربران و ظاهر برنامه"/>
+      <Segmented items={tabs} value={tab} onChange={(value) => setTab(value as SettingsTab)}/>
 
-      <div className="settings-tab-scroll">
-        <div className="settings-tabs">
-          {[
-            ['services', 'خدمات'],
-            ['serviceCategories', 'کتگوری خدمات'],
-            ['expenseCategories', 'کتگوری هزینه‌ها'],
-            ['appearance', 'تغییر ظاهر'],
-            ['users', 'کاربران'],
-            ['backup', 'پشتیبان و خروجی'],
-          ].map(([value, label]) => (
-            <button className={tab === value ? 'active' : ''} key={value} onClick={() => setTab(value as Tab)} type="button">{label}</button>
-          ))}
-        </div>
-      </div>
-
-      {tab === 'services' && (
-        <Card>
-          <div className="section-heading">
-            <div><h2>لیست خدمات</h2><p>قیمت ثابت، قیمت پایه و کتگوری هر خدمت</p></div>
-            <button className="primary-button" type="button" onClick={() => { setServiceNew(true); setServiceEditor(createEmptyService()) }}><Plus size={18} />افزودن خدمت</button>
-          </div>
-          <div className="settings-list">
-            {services.map((service) => (
-              <div className="settings-row" key={service.id}>
-                <div><strong>{service.name}</strong><span>{serviceCategories.find((item) => item.id === service.categoryId)?.name ?? 'بدون کتگوری'} — {service.priceMode === 'from' ? 'از قیمت پایه' : 'قیمت ثابت'}</span></div>
-                <strong><Money cents={service.priceCents} /></strong>
-                <span className={`status-chip ${service.active ? 'success' : ''}`}>{service.active ? 'فعال' : 'غیرفعال'}</span>
-                <button className="icon-button" type="button" onClick={() => { setServiceNew(false); setServiceEditor(service) }}><Edit3 size={17} /></button>
-                <button className="icon-button danger" type="button" onClick={() => setDeleteTarget({ type: 'service', id: service.id, name: service.name })}><Trash2 size={17} /></button>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {tab === 'serviceCategories' && (
-        <Card>
-          <div className="section-heading"><div><h2>کتگوری‌های خدمات</h2><p>تب‌های بالای صفحه خدمات از این قسمت ساخته می‌شوند.</p></div><button className="primary-button" type="button" onClick={() => setCategoryEditor({ id: crypto.randomUUID(), name: '', order: serviceCategories.length + 1, active: true })}><Plus size={18} />افزودن کتگوری</button></div>
-          <div className="settings-list">
-            {serviceCategories.map((item) => (
-              <div className="settings-row compact-row" key={item.id}><div><strong>{item.name}</strong><span>{services.filter((service) => service.categoryId === item.id).length} خدمت</span></div><span className={`status-chip ${item.active ? 'success' : ''}`}>{item.active ? 'فعال' : 'غیرفعال'}</span><button className="icon-button" onClick={() => setCategoryEditor(item)} type="button"><Edit3 size={17} /></button><button className="icon-button danger" onClick={() => setDeleteTarget({ type: 'category', id: item.id, name: item.name })} type="button"><Trash2 size={17} /></button></div>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {tab === 'expenseCategories' && (
-        <Card>
-          <div className="section-heading"><div><h2>کتگوری‌های هزینه</h2><p>برای ثبت و تحلیل منظم هزینه‌ها</p></div><button className="primary-button" type="button" onClick={() => setExpenseEditor({ id: crypto.randomUUID(), name: '', order: expenseCategories.length + 1, active: true })}><Plus size={18} />افزودن کتگوری</button></div>
-          <div className="settings-list">
-            {expenseCategories.map((item) => (
-              <div className="settings-row compact-row" key={item.id}><div><strong>{item.name}</strong><span>ترتیب {item.order}</span></div><span className={`status-chip ${item.active ? 'success' : ''}`}>{item.active ? 'فعال' : 'غیرفعال'}</span><button className="icon-button" onClick={() => setExpenseEditor(item)} type="button"><Edit3 size={17} /></button><button className="icon-button danger" onClick={() => setDeleteTarget({ type: 'expense', id: item.id, name: item.name })} type="button"><Trash2 size={17} /></button></div>
-            ))}
-          </div>
-        </Card>
-      )}
-
-      {tab === 'appearance' && (
-        <div className="appearance-grid">
-          <Card className="theme-card">
-            <div className="section-heading"><div><h2>پالت رنگی</h2><p>تمام اجزای هم‌نوع به‌صورت یکپارچه تغییر می‌کنند.</p></div><Palette size={23} /></div>
-            <div className="color-grid">
-              {[
-                ['primary', 'دکمه اصلی'], ['secondary', 'رنگ مکمل'],
-                ['background', 'پس‌زمینه'], ['surface', 'کارت‌ها'],
-                ['text', 'متن اصلی'], ['muted', 'متن کم‌رنگ'],
-                ['sidebar', 'منوی کناری'], ['success', 'موفقیت'], ['danger', 'خطا'],
-              ].map(([key, label]) => (
-                <label className="color-field" key={key}><span>{label}</span><input type="color" value={String(theme[key as keyof ThemeSettings])} onChange={(event) => updateTheme(key as keyof ThemeSettings, event.target.value as never)} /></label>
+      <Card className="settings-card">
+        {tab === 'services' && (
+          <>
+            <div className="panel-heading"><div><h2>خدمات</h2><p>قیمت و نوع قیمت هر خدمت</p></div>
+              <button className="button primary" type="button" onClick={() => setServiceEditor('new')}>
+                <Icon name="plus"/>افزودن خدمت
+              </button></div>
+            <div className="settings-list">
+              {services.map((item) => (
+                <div className="settings-row clickable" role="button" tabIndex={0} key={item.id}
+                  onClick={() => setServiceEditor(item)}>
+                  <div><strong>{item.name}</strong><small>
+                    {categories.find((category) => category.id === item.categoryId)?.name ?? 'بدون کتگوری'}
+                    {' — '}{item.pricingMode === 'from' ? 'از قیمت پایه' : 'قیمت ثابت'}
+                  </small></div>
+                  <Money cents={item.priceCents}/>
+                  <span className={item.active ? 'status success' : 'status'}>
+                    {item.active ? 'فعال' : 'غیرفعال'}</span>
+                  <span className="row-actions">
+                    <Icon name="edit"/>
+                    <button className="icon-button danger-soft" type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setDeleteTarget({ type: 'service', id: item.id, name: item.name })
+                      }}><Icon name="trash" size={17}/></button>
+                  </span>
+                </div>
               ))}
             </div>
-          </Card>
-          <Card className="theme-card">
-            <div className="section-heading"><div><h2>شکل و شفافیت</h2><p>گردی، سایه و شیشه‌ای‌بودن رابط</p></div></div>
-            {[
-              ['radius', 'گردی کارت‌ها', 10, 40],
-              ['shadow', 'قدرت سایه', 0, 40],
-              ['blur', 'میزان شیشه‌ای', 0, 40],
-              ['surfaceOpacity', 'شفافیت کارت‌ها', 35, 100],
-              ['backgroundOpacity', 'شدت تصویر پس‌زمینه', 0, 100],
-            ].map(([key, label, min, max]) => (
-              <label className="range-field" key={String(key)}><span>{label}<b>{String(theme[key as keyof ThemeSettings])}</b></span><input type="range" min={Number(min)} max={Number(max)} value={Number(theme[key as keyof ThemeSettings])} onChange={(event) => updateTheme(key as keyof ThemeSettings, Number(event.target.value) as never)} /></label>
-            ))}
-            <label className="image-upload"><Image size={21} /><span>انتخاب تصویر پس‌زمینه داشبورد</span><input type="file" accept="image/*" onChange={async (event) => { const file = event.target.files?.[0]; if (file) updateTheme('backgroundImage', await compressBackground(file)) }} /></label>
-            <div className="theme-actions"><button className="secondary-button" type="button" onClick={() => { setTheme(defaultTheme); applyTheme(defaultTheme) }}><RotateCcw size={18} />بازنشانی</button><button className="primary-button" type="button" onClick={persistTheme}><Save size={18} />ذخیره ظاهر</button></div>
-          </Card>
-        </div>
-      )}
+          </>
+        )}
 
-      {tab === 'users' && (
-        <Card>
-          <div className="section-heading"><div><h2>کاربران</h2><p>مدیر به همه بخش‌ها و کارمند فقط به خدمات و شیفت دسترسی دارد.</p></div><button className="primary-button" type="button" onClick={() => setUserEditor(true)}><UserPlus size={18} />افزودن کارمند</button></div>
-          <div className="settings-list">
-            {users.map((item) => (
-              <div className="settings-row compact-row" key={item.id}><div><strong>{item.displayName}</strong><span>{item.username} — {item.role === 'manager' ? 'مدیر' : 'کارمند'}</span></div><span className={`status-chip ${item.active ? 'success' : ''}`}>{item.active ? 'فعال' : 'غیرفعال'}</span>{item.id !== currentUser.id && <button className="secondary-button small" type="button" onClick={async () => { await db.users.put({ ...item, active: !item.active }); await load(); onChanged() }}>{item.active ? 'تعلیق' : 'فعال‌سازی'}</button>}</div>
-            ))}
+        {tab === 'categories' && (
+          <>
+            <div className="panel-heading"><div><h2>کتگوری خدمات</h2><p>گروه‌بندی خدمات در صفحه اصلی</p></div>
+              <button className="button primary" type="button" onClick={() => setCategoryEditor('new')}>
+                <Icon name="plus"/>افزودن کتگوری
+              </button></div>
+            <div className="settings-list">
+              {categories.map((item) => (
+                <div className="settings-row" key={item.id}>
+                  <div><strong>{item.name}</strong><small>
+                    <span className="numeric">{services.filter((service) => service.categoryId === item.id).length}</span> خدمت
+                  </small></div>
+                  <span className={item.active ? 'status success' : 'status'}>
+                    {item.active ? 'فعال' : 'غیرفعال'}</span>
+                  <span className="row-actions">
+                    <button className="icon-button" type="button"
+                      onClick={() => setCategoryEditor(item)}><Icon name="edit" size={17}/></button>
+                    <button className="icon-button danger-soft" type="button"
+                      onClick={() => setDeleteTarget({ type: 'category', id: item.id, name: item.name })}>
+                      <Icon name="trash" size={17}/></button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {tab === 'expenses' && (
+          <>
+            <div className="panel-heading"><div><h2>کتگوری هزینه‌ها</h2><p>گروه‌بندی خروجی‌های صندوق</p></div>
+              <button className="button primary" type="button" onClick={() => setExpenseEditor('new')}>
+                <Icon name="plus"/>افزودن کتگوری
+              </button></div>
+            <div className="settings-list">
+              {expenseCategories.map((item) => (
+                <div className="settings-row" key={item.id}>
+                  <div><strong>{item.name}</strong><small>کتگوری هزینه</small></div>
+                  <span className={item.active ? 'status success' : 'status'}>
+                    {item.active ? 'فعال' : 'غیرفعال'}</span>
+                  <span className="row-actions">
+                    <button className="icon-button" type="button"
+                      onClick={() => setExpenseEditor(item)}><Icon name="edit" size={17}/></button>
+                    <button className="icon-button danger-soft" type="button"
+                      onClick={() => setDeleteTarget({ type: 'expense', id: item.id, name: item.name })}>
+                      <Icon name="trash" size={17}/></button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {tab === 'users' && (
+          <>
+            <div className="panel-heading"><div><h2>کاربران</h2><p>برای مدیریت حساب روی ردیف کارمند کلیک کنید.</p></div>
+              <button className="button primary" type="button" onClick={() => setEmployeeEditor('new')}>
+                <Icon name="users"/>افزودن کارمند
+              </button></div>
+            <div className="settings-list">
+              {users.map((item) => (
+                <button className="settings-row clickable" type="button" key={item.id}
+                  onClick={() => item.role === 'employee' && setEmployeeEditor(item)}>
+                  <div><strong>{item.name}</strong><small>
+                    <span className="numeric" dir="ltr">{item.username}</span>
+                    {' — '}{item.role === 'manager' ? 'مدیر' : 'کارمند'}
+                  </small></div>
+                  <span>{item.lastLoginAt
+                    ? <>آخرین ورود: <b className="numeric">{new Date(item.lastLoginAt).toLocaleString('en-GB')}</b></>
+                    : 'هنوز وارد نشده'}</span>
+                  <span className={item.active ? 'status success' : 'status'}>
+                    {item.active ? 'فعال' : 'تعلیق‌شده'}</span>
+                  {item.role === 'employee' && <Icon name="edit"/>}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {tab === 'appearance' && <AppearancePanel/>}
+
+        {tab === 'backup' && (
+          <div className="backup-panel">
+            <div className="panel-heading"><div><h2>پشتیبان و خروجی</h2>
+              <p>خروجی اطلاعات تست و گزارش Excel</p></div><Icon name="download"/></div>
+            <div className="backup-buttons">
+              <button className="button primary" type="button" onClick={downloadJsonBackup}>
+                <Icon name="download"/>دانلود پشتیبان JSON
+              </button>
+              <button className="button secondary" type="button" onClick={downloadExcel}>
+                <Icon name="download"/>دانلود گزارش Excel
+              </button>
+            </div>
           </div>
-        </Card>
-      )}
+        )}
+      </Card>
 
-      {tab === 'backup' && (
-        <div className="backup-grid">
-          <Card className="backup-card"><Download size={30} /><h2>پشتیبان JSON</h2><p>نسخه کامل داده‌های این مرورگر</p><button className="primary-button" onClick={downloadBackup} type="button"><Download size={18} />دانلود پشتیبان</button></Card>
-          <Card className="backup-card"><FileSpreadsheet size={30} /><h2>گزارش Excel</h2><p>فعالیت‌ها و شیفت‌ها با ستون‌های منظم</p><button className="primary-button" onClick={downloadExcel} type="button"><FileSpreadsheet size={18} />دانلود Excel</button></Card>
+      <Modal open={Boolean(serviceEditor)} title={serviceEditor === 'new'
+        ? 'افزودن خدمت' : 'ویرایش خدمت'} onClose={() => setServiceEditor(undefined)}>
+        {serviceEditor && <ServiceForm
+          service={serviceEditor === 'new' ? undefined : serviceEditor}
+          categories={categories.filter((item) => item.active)}
+          onClose={() => setServiceEditor(undefined)}
+          onSaved={() => refreshed()}/>}
+      </Modal>
+
+      <Modal open={Boolean(categoryEditor)} title={categoryEditor === 'new'
+        ? 'افزودن کتگوری خدمات' : 'ویرایش کتگوری خدمات'}
+        onClose={() => setCategoryEditor(undefined)} className="small-modal">
+        {categoryEditor && <CategoryForm type="service"
+          value={categoryEditor === 'new' ? undefined : categoryEditor}
+          onClose={() => setCategoryEditor(undefined)}
+          onSaved={() => refreshed()}/>}
+      </Modal>
+
+      <Modal open={Boolean(expenseEditor)} title={expenseEditor === 'new'
+        ? 'افزودن کتگوری هزینه' : 'ویرایش کتگوری هزینه'}
+        onClose={() => setExpenseEditor(undefined)} className="small-modal">
+        {expenseEditor && <CategoryForm type="expense"
+          value={expenseEditor === 'new' ? undefined : expenseEditor}
+          onClose={() => setExpenseEditor(undefined)}
+          onSaved={() => refreshed()}/>}
+      </Modal>
+
+      <Modal open={Boolean(employeeEditor)} title={employeeEditor === 'new'
+        ? 'افزودن کارمند' : 'مدیریت کارمند'}
+        onClose={() => setEmployeeEditor(undefined)} className="small-modal">
+        {employeeEditor && <EmployeeForm
+          employee={employeeEditor === 'new' ? undefined : employeeEditor}
+          onClose={() => setEmployeeEditor(undefined)}
+          onSaved={(password) => {
+            if (password) setTemporaryPassword(password)
+            refreshed('حساب کارمند ذخیره شد.')
+          }}
+          onDelete={employeeEditor === 'new' ? undefined : () => {
+            setEmployeeEditor(undefined)
+            setDeleteTarget({
+              type: 'user',
+              id: employeeEditor.id,
+              name: employeeEditor.name,
+            })
+          }}/>}
+      </Modal>
+
+      <Modal open={Boolean(temporaryPassword)} title="رمز موقت کارمند"
+        onClose={() => setTemporaryPassword('')} className="small-modal">
+        <div className="temporary-password">
+          <p>این رمز را اکنون کپی کنید. بعداً قابل نمایش نیست.</p>
+          <strong className="numeric" dir="ltr">{temporaryPassword}</strong>
+          <button className="button primary full" type="button" onClick={() => {
+            navigator.clipboard.writeText(temporaryPassword)
+            setToast('رمز کپی شد.')
+          }}>کپی رمز</button>
         </div>
-      )}
+      </Modal>
 
-      <ServiceEditor open={Boolean(serviceEditor)} service={serviceEditor} categories={serviceCategories} isNew={serviceNew} onClose={() => setServiceEditor(null)} onSaved={async () => { await load(); onChanged(); setServiceEditor(null); setToast('خدمت ذخیره شد.') }} />
-      <CategoryEditor open={Boolean(categoryEditor)} value={categoryEditor} type="service" onClose={() => setCategoryEditor(null)} onSaved={async () => { await load(); onChanged(); setCategoryEditor(null); setToast('کتگوری ذخیره شد.') }} />
-      <CategoryEditor open={Boolean(expenseEditor)} value={expenseEditor} type="expense" onClose={() => setExpenseEditor(null)} onSaved={async () => { await load(); onChanged(); setExpenseEditor(null); setToast('کتگوری ذخیره شد.') }} />
-      <UserEditor open={userEditor} onClose={() => setUserEditor(false)} onSaved={async () => { await load(); onChanged(); setUserEditor(false); setToast('کارمند ساخته شد.') }} />
-      <ConfirmModal open={Boolean(deleteTarget)} title="تأیید حذف" message={`«${deleteTarget?.name ?? ''}» حذف شود؟ سوابق فعالیت‌های قبلی تغییر نمی‌کنند.`} confirmText="حذف" danger onClose={() => setDeleteTarget(null)} onConfirm={remove} />
-      {toast && <Toast message={toast} onDone={() => setToast('')} />}
+      <ConfirmModal open={Boolean(deleteTarget)} title="تأیید حذف"
+        text={`آیا از حذف «${deleteTarget?.name ?? ''}» مطمئن هستید؟`}
+        confirmText="حذف" danger onClose={() => setDeleteTarget(undefined)}
+        onConfirm={remove}/>
+
+      {toast && <Toast message={toast} onDone={() => setToast('')}/>}
     </>
   )
-}
-
-function ServiceEditor({ open, service, categories, isNew, onClose, onSaved }: { open: boolean; service: Service | null; categories: ServiceCategory[]; isNew: boolean; onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState<Service | null>(service)
-  const [price, setPrice] = useState(service ? euroInput(service.priceCents) : '')
-  useEffect(() => { setForm(service); setPrice(service ? euroInput(service.priceCents) : '') }, [service])
-  if (!form) return null
-  const submit = async (event: FormEvent) => {
-    event.preventDefault()
-    await db.services.put({ ...form, priceCents: parseEuro(price), updatedAt: new Date().toISOString() })
-    onSaved()
-  }
-  return <Modal open={open} title={isNew ? 'افزودن خدمت' : 'ویرایش خدمت'} onClose={onClose}>
-    <form className="modal-form" onSubmit={submit}>
-      <label><span>نام خدمت</span><input className="input" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required /></label>
-      <label><span>کتگوری</span><select className="input" value={form.categoryId} onChange={(event) => setForm({ ...form, categoryId: event.target.value })} required>{categories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
-      <div className="form-grid"><label><span>قیمت پایه</span><input className="input" type="number" min="0" step="0.01" dir="ltr" value={price} onChange={(event) => setPrice(event.target.value)} required /></label><label><span>مدت، دقیقه</span><input className="input" type="number" min="0" value={form.durationMinutes} onChange={(event) => setForm({ ...form, durationMinutes: Number(event.target.value) })} /></label></div>
-      <label><span>نوع قیمت</span><select className="input" value={form.priceMode} onChange={(event) => setForm({ ...form, priceMode: event.target.value as PriceMode })}><option value="fixed">قیمت ثابت</option><option value="from">از قیمت پایه</option></select></label>
-      <label className="check-field"><input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} /><span>فعال باشد</span></label>
-      <div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>انصراف</button><button className="primary-button" type="submit">ذخیره</button></div>
-    </form>
-  </Modal>
-}
-
-function CategoryEditor({ open, value, type, onClose, onSaved }: { open: boolean; value: ServiceCategory | ExpenseCategory | null; type: 'service' | 'expense'; onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState(value)
-  useEffect(() => setForm(value), [value])
-  if (!form) return null
-  const submit = async (event: FormEvent) => {
-    event.preventDefault()
-    if (type === 'service') await db.serviceCategories.put(form as ServiceCategory)
-    else await db.expenseCategories.put(form as ExpenseCategory)
-    onSaved()
-  }
-  return <Modal open={open} title={type === 'service' ? 'کتگوری خدمات' : 'کتگوری هزینه'} onClose={onClose}>
-    <form className="modal-form" onSubmit={submit}>
-      <label><span>نام کتگوری</span><input className="input" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required autoFocus /></label>
-      <div className="form-grid"><label><span>ترتیب نمایش</span><input className="input" type="number" min="1" value={form.order} onChange={(event) => setForm({ ...form, order: Number(event.target.value) })} /></label><label className="check-field"><input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} /><span>فعال باشد</span></label></div>
-      <div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>انصراف</button><button className="primary-button" type="submit">ذخیره</button></div>
-    </form>
-  </Modal>
-}
-
-function UserEditor({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
-  const [displayName, setDisplayName] = useState('')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const submit = async (event: FormEvent) => {
-    event.preventDefault()
-    try {
-      await createUser({ displayName, username, password, role: 'staff' })
-      setDisplayName(''); setUsername(''); setPassword(''); setError('')
-      onSaved()
-    } catch {
-      setError('نام کاربری تکراری است یا رمز کمتر از ۶ کاراکتر است.')
-    }
-  }
-  return <Modal open={open} title="افزودن کارمند" onClose={onClose}>
-    <form className="modal-form" onSubmit={submit}>
-      <label><span>نام نمایشی</span><input className="input" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required /></label>
-      <label><span>نام کاربری</span><input className="input" dir="ltr" value={username} onChange={(event) => setUsername(event.target.value)} required /></label>
-      <label><span>رمز عبور</span><input className="input" dir="ltr" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={6} /></label>
-      {error && <p className="form-error">{error}</p>}
-      <div className="modal-actions"><button className="secondary-button" type="button" onClick={onClose}>انصراف</button><button className="primary-button" type="submit"><Users size={18} />ساخت کارمند</button></div>
-    </form>
-  </Modal>
 }

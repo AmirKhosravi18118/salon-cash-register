@@ -1,121 +1,104 @@
-import {
-  Activity, BarChart3, LayoutDashboard, LogOut, Palette,
-  Scissors, Settings, ShoppingCart, WalletCards,
-} from 'lucide-react'
 import type { ReactNode } from 'react'
-import type { RouteName, User } from '../types'
+import type { RouteName, UserAccount } from '../types'
+import { Icon } from './ui'
 
-export function navigate(route: RouteName): void {
-  window.location.hash = `/${route}`
+export function go(route: RouteName, query?: Record<string, string>): void {
+  const params = query ? `?${new URLSearchParams(query).toString()}` : ''
+  window.location.hash = `/${route}${params}`
 }
 
-const nav = [
-  { route: 'dashboard' as const, label: 'داشبورد', icon: LayoutDashboard, manager: true },
-  { route: 'services' as const, label: 'خدمات', icon: Scissors, manager: false },
-  { route: 'activities' as const, label: 'فعالیت‌ها', icon: Activity, manager: true },
-  { route: 'analytics' as const, label: 'تحلیل داده‌ها', icon: BarChart3, manager: true },
-  { route: 'cashbox' as const, label: 'شیفت', icon: WalletCards, manager: false },
-  { route: 'settings' as const, label: 'تنظیمات', icon: Settings, manager: true },
+const managerNav: Array<{ route: RouteName; label: string; icon: Parameters<typeof Icon>[0]['name'] }> = [
+  { route: 'dashboard', label: 'داشبورد', icon: 'dashboard' },
+  { route: 'services', label: 'خدمات', icon: 'scissors' },
+  { route: 'activities', label: 'فعالیت‌ها', icon: 'activity' },
+  { route: 'analytics', label: 'تحلیل داده‌ها', icon: 'chart' },
+  { route: 'cashbox', label: 'شیفت', icon: 'wallet' },
+  { route: 'settings', label: 'تنظیمات', icon: 'settings' },
 ]
 
 export function Layout({
-  user, route, cartCount, children, onLogout, onOpenCart,
+  route, user, cartCount, children, onCart, onLogout,
 }: {
-  user: User
   route: RouteName
+  user: UserAccount
   cartCount: number
   children: ReactNode
+  onCart: () => void
   onLogout: () => void
-  onOpenCart: () => void
 }) {
-  const allowed = nav.filter((item) => user.role === 'manager' || !item.manager)
-  const mobileLeft = user.role === 'manager'
-    ? allowed.filter((item) => item.route === 'dashboard' || item.route === 'services')
-    : allowed.filter((item) => item.route === 'services')
-  const mobileRight = user.role === 'manager'
-    ? allowed.filter((item) => item.route === 'analytics' || item.route === 'settings')
-    : allowed.filter((item) => item.route === 'cashbox')
+  const navigation = user.role === 'manager'
+    ? managerNav
+    : managerNav.filter((item) => item.route === 'services')
+  const mobileNavigation = user.role === 'manager'
+    ? managerNav.filter((item) =>
+        ['dashboard', 'services', 'analytics', 'settings'].includes(item.route))
+    : navigation
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-logo">FH</div>
+          <div className="brand-mark">FH</div>
           <div><strong>Firouzeh</strong><small>پنل داخلی سالن</small></div>
         </div>
-
-        <nav className="side-nav">
-          {allowed.map(({ route: itemRoute, label, icon: Icon }) => (
-            <button
-              key={itemRoute}
-              type="button"
-              className={route === itemRoute ? 'active' : ''}
-              onClick={() => navigate(itemRoute)}
-            >
-              <Icon size={20} /><span>{label}</span>
+        <nav className="sidebar-nav">
+          {navigation.map((item) => (
+            <button key={item.route} type="button"
+              className={route === item.route ? 'active' : ''}
+              onClick={() => go(item.route)}>
+              <Icon name={item.icon}/><span>{item.label}</span>
             </button>
           ))}
         </nav>
-
         <div className="sidebar-user">
-          <div className="user-avatar">{user.displayName.slice(0, 1)}</div>
-          <div><strong>{user.displayName}</strong><small>{user.role === 'manager' ? 'مدیر' : 'کارمند'}</small></div>
-          <button className="icon-button dark" type="button" onClick={onLogout} aria-label="خروج">
-            <LogOut size={18} />
-          </button>
+          <div className="avatar">{user.name.slice(0, 1)}</div>
+          <div><strong>{user.name}</strong><small>{user.role === 'manager' ? 'مدیر' : 'کارمند'}</small></div>
+          <button className="icon-button dark" type="button" onClick={onLogout}
+            aria-label="خروج"><Icon name="logout"/></button>
         </div>
       </aside>
 
       <div className="main-column">
         <header className="topbar">
-          <div className="version-pill">نسخه آزمایشی ۰.۸</div>
-          <div className="top-actions">
-            <button className="cart-button compact" type="button" onClick={onOpenCart}>
-              <ShoppingCart size={20} />
-              <span>سبد</span>
-              {cartCount > 0 && <b>{cartCount}</b>}
-            </button>
+          <div className="topbar-actions">
             {user.role === 'manager' && (
-              <button className="icon-button" type="button" onClick={() => navigate('settings')}>
-                <Palette size={19} />
+              <button className="top-action" type="button"
+                onClick={() => go('settings', { tab: 'appearance' })}>
+                <Icon name="palette"/><span>تغییر ظاهر</span>
               </button>
             )}
-            <button className="icon-button" type="button" onClick={onLogout} aria-label="خروج">
-              <LogOut size={18} />
+            <button className="top-action cart-button" type="button" onClick={onCart}>
+              <Icon name="cart"/><span>سبد</span>
+              {cartCount > 0 && <b className="cart-badge numeric">{cartCount}</b>}
             </button>
-            <div className="top-user">{user.displayName}</div>
           </div>
+          <span className="version-badge">نسخه آزمایشی <b className="numeric">0.9</b></span>
         </header>
         <main className="page-content">{children}</main>
       </div>
 
-      <nav
-        className="mobile-nav"
-        style={{ gridTemplateColumns: `repeat(${mobileLeft.length + mobileRight.length + 1}, 1fr)` }}
-      >
-        {mobileLeft.map(({ route: itemRoute, label, icon: Icon }) => (
-          <button
-            key={itemRoute}
-            className={route === itemRoute ? 'active' : ''}
-            onClick={() => navigate(itemRoute)}
-            type="button"
-          >
-            <Icon size={20} /><span>{label}</span>
+      <nav className={`mobile-nav ${user.role}`}>
+        {mobileNavigation.slice(0, user.role === 'manager' ? 2 : 1).map((item) => (
+          <button key={item.route} type="button"
+            className={route === item.route ? 'active' : ''}
+            onClick={() => go(item.route)}>
+            <Icon name={item.icon}/><span>{item.label}</span>
           </button>
         ))}
-        <button className="mobile-cart" type="button" onClick={onOpenCart}>
-          <ShoppingCart size={25} />
-          {cartCount > 0 && <b>{cartCount}</b>}
+        <button className="mobile-cart" type="button" onClick={onCart}>
+          <Icon name="cart" size={25}/>
+          {cartCount > 0 && <b className="cart-badge numeric">{cartCount}</b>}
         </button>
-        {mobileRight.map(({ route: itemRoute, label, icon: Icon }) => (
-          <button
-            key={itemRoute}
-            className={route === itemRoute ? 'active' : ''}
-            onClick={() => navigate(itemRoute)}
-            type="button"
-          >
-            <Icon size={20} /><span>{label}</span>
+        {user.role === 'manager' && mobileNavigation.slice(2, 4).map((item) => (
+          <button key={item.route} type="button"
+            className={route === item.route ? 'active' : ''}
+            onClick={() => go(item.route)}>
+            <Icon name={item.icon}/><span>{item.label}</span>
           </button>
         ))}
+        {user.role === 'employee' && (
+          <button type="button" onClick={onLogout}><Icon name="logout"/><span>خروج</span></button>
+        )}
       </nav>
     </div>
   )
