@@ -1,85 +1,125 @@
-export type Locale = 'fa' | 'de'
+export type Role = 'manager' | 'staff'
 export type RouteName =
-  | 'dashboard' | 'sale' | 'movement' | 'cashbox'
-  | 'transactions' | 'reports' | 'settings'
+  | 'dashboard' | 'services' | 'checkout' | 'activities'
+  | 'analytics' | 'cashbox' | 'settings'
 
-export type ServiceKind = 'service' | 'package'
-export type TransactionKind =
-  | 'sale' | 'expense' | 'owner_deposit' | 'owner_withdrawal'
-  | 'bank_deposit' | 'refund' | 'adjustment'
+export type PriceMode = 'fixed' | 'from'
+export type MovementKind =
+  | 'service' | 'expense' | 'deposit' | 'withdrawal'
+  | 'bank' | 'refund' | 'adjustment'
 
-export interface SalonService {
+export interface User {
   id: string
-  kind: ServiceKind
-  nameFa: string
-  nameDe: string
-  categoryFa: string
-  categoryDe: string
-  priceCents: number
+  displayName: string
+  username: string
+  passwordHash: string
+  salt: string
+  role: Role
   active: boolean
-  allowCustomPrice: boolean
-  accent: string
+  createdAt: string
+}
+
+export interface ServiceCategory {
+  id: string
+  name: string
+  order: number
+  active: boolean
+}
+
+export interface Service {
+  id: string
+  categoryId: string
+  name: string
+  durationMinutes: number
+  priceCents: number
+  priceMode: PriceMode
+  active: boolean
   createdAt: string
   updatedAt: string
 }
 
-export interface SaleItem {
-  serviceId: string
-  nameFa: string
-  nameDe: string
-  quantity: number
+export interface ExpenseCategory {
+  id: string
+  name: string
+  order: number
+  active: boolean
+}
+
+export interface CartItem {
+  id: string
+  serviceId?: string
+  categoryId?: string
+  name: string
+  basePriceCents: number
   unitPriceCents: number
+  quantity: number
+  custom: boolean
+}
+
+export interface TransactionItem {
+  serviceId?: string
+  categoryId?: string
+  name: string
+  basePriceCents: number
+  unitPriceCents: number
+  quantity: number
   totalCents: number
+  custom: boolean
 }
 
 export interface CashTransaction {
   id: string
   sequence: string
-  kind: TransactionKind
+  kind: MovementKind
   amountCents: number
-  tipCents: number
   cashEffectCents: number
-  category: string
+  tipCents: number
+  categoryId?: string
+  categoryName: string
   note: string
-  items: SaleItem[]
-  sessionId: string
+  items: TransactionItem[]
+  sessionId?: string
+  userId: string
+  userName: string
   createdAt: string
-  isDemo?: boolean
 }
 
 export interface CashSession {
   id: string
   status: 'open' | 'closed'
-  openingBalanceCents: number
   openedAt: string
   closedAt?: string
-  expectedBalanceCents?: number
-  countedBalanceCents?: number
+  openedByUserId: string
+  openedByName: string
+  closedByUserId?: string
+  closedByName?: string
+  openingSystemCents: number
+  openingCountedCents: number
+  closingExpectedCents?: number
+  closingCountedCents?: number
   differenceCents?: number
+  shiftChangeCents?: number
 }
 
-export interface PriceHistory {
-  id: string
-  serviceId: string
-  serviceNameFa: string
-  serviceNameDe: string
-  previousPriceCents: number
-  newPriceCents: number
-  changedAt: string
+export interface ThemeSettings {
+  primary: string
+  secondary: string
+  background: string
+  surface: string
+  text: string
+  muted: string
+  sidebar: string
+  success: string
+  danger: string
+  radius: number
+  shadow: number
+  blur: number
+  surfaceOpacity: number
+  backgroundImage: string
+  backgroundOpacity: number
 }
 
-export interface AppSetting { key: string; value: string }
-
-export interface DashboardSnapshot {
-  openSession?: CashSession
-  expectedBalanceCents: number
-  todaySalesCents: number
-  todayTipsCents: number
-  todayExpensesCents: number
-  todayNetCashCents: number
-  monthSalesCents: number
-  monthNetCashCents: number
-  todayTransactionCount: number
-  recentTransactions: CashTransaction[]
-  dailySales: Array<{ date: string; value: number }>
+export interface AppSetting {
+  key: string
+  value: string
 }

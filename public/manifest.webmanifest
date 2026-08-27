@@ -1,13 +1,12 @@
 {
-  "name": "Salon Kasse — صندوق نقدی آرایشگاه",
-  "short_name": "Salon Kasse",
-  "description": "Bilingual offline-first salon cash register",
+  "name": "Firouzeh — پنل داخلی سالن",
+  "short_name": "Firouzeh",
+  "description": "پنل داخلی مدیریت خدمات و صندوق سالن",
   "start_url": "/#/dashboard",
   "scope": "/",
   "display": "standalone",
-  "orientation": "any",
-  "background_color": "#f6eee8",
-  "theme_color": "#3b2723",
+  "background_color": "#f5ebe4",
+  "theme_color": "#422d28",
   "lang": "fa",
   "dir": "rtl",
   "icons": [

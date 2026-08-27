@@ -5,6 +5,9 @@ import '@fontsource-variable/vazirmatn/wght.css'
 import './styles.css'
 import App from './App'
 
+document.documentElement.lang = 'fa'
+document.documentElement.dir = 'rtl'
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode><App /></React.StrictMode>,
 )
