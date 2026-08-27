@@ -18,6 +18,7 @@ import type { CartItem, RouteName, UserAccount } from './types'
 const routes: RouteName[] = [
   'dashboard','services','activities','analytics','cashbox','settings',
 ]
+const employeeRoutes: RouteName[] = ['services', 'cashbox']
 
 function readLocation(): { route: RouteName; query: URLSearchParams } {
   const raw = window.location.hash.replace(/^#\/?/, '')
@@ -67,7 +68,7 @@ export default function App() {
     window.location.hash = ''
   }
 
-  const route = user?.role === 'employee' && location.route !== 'services'
+  const route = user?.role === 'employee' && !employeeRoutes.includes(location.route)
     ? 'services' : location.route
 
   const page = useMemo(() => {
@@ -95,6 +96,7 @@ export default function App() {
     return <div className="splash"><div className="splash-logo">FH</div>
       <h1>فیروزه، خوش آمدید</h1><p>پنل در حال آماده‌سازی است…</p><i/></div>
   }
+
   if (!user) return <AuthPage onAuthenticated={handleAuthenticated}/>
 
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0)
@@ -105,11 +107,13 @@ export default function App() {
         onCart={() => setCartOpen(true)} onLogout={handleLogout}>
         {page}
       </Layout>
+
       <CartModal open={cartOpen} cart={cart} onClose={() => setCartOpen(false)}
         onUpdate={setCart} onCheckout={() => {
           setCartOpen(false)
           setCheckoutOpen(true)
         }}/>
+
       <Modal open={checkoutOpen} title="پرداخت" onClose={() => setCheckoutOpen(false)}
         className="checkout-modal">
         <PaymentPanel cart={cart} user={user} revision={revision} compact

@@ -644,3 +644,415 @@ h1,h2,h3,strong { overflow-wrap: anywhere; }
 @media (prefers-reduced-motion:reduce) {
   *,*::before,*::after { animation-duration:.01ms!important; animation-iteration-count:1!important; transition-duration:.01ms!important; scroll-behavior:auto!important; }
 }
+
+/* =========================================================
+   Firouzeh final targeted fixes - v0.9.1-test
+   ========================================================= */
+
+body {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 15% 5%,
+      color-mix(in srgb, var(--secondary) 35%, transparent),
+      transparent 28rem),
+    var(--page-bg);
+}
+
+body::before {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  content: "";
+  pointer-events: none;
+  background-image: var(--custom-background-image);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  opacity: var(--background-image-opacity);
+}
+
+#root {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+}
+
+/* Dashboard values: restore the large, readable v0.8 hierarchy. */
+.cash-hero > strong {
+  display: block;
+  margin: 35px 0;
+  color: inherit;
+  font-size: clamp(42px, 5vw, 68px);
+  font-weight: 850;
+  line-height: 1.05;
+}
+
+.cash-hero > strong .money {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.month-card > strong,
+.metric > strong,
+.cashbox-balance {
+  line-height: 1.2;
+}
+
+.metric > strong .money,
+.month-card > strong .money,
+.cashbox-balance .money {
+  font-size: inherit;
+}
+
+/* Shift opening review. */
+.system-balance-line {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: rgba(255,255,255,.55);
+}
+
+.system-balance-line span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.system-balance-line strong {
+  font-size: 18px;
+}
+
+/* Real table layout prevents RTL values from shifting under wrong headers. */
+.shift-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.shift-data-table {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  direction: rtl;
+}
+
+.shift-data-table th,
+.shift-data-table td {
+  min-width: 0;
+  padding: 15px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+  vertical-align: middle;
+}
+
+.shift-data-table th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.shift-data-table td {
+  font-size: 13px;
+}
+
+.shift-data-table td .money,
+.shift-data-table td .numeric {
+  direction: ltr;
+  unicode-bidi: isolate;
+  white-space: nowrap;
+}
+
+.shift-data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+/* Theme editor now has an explicit save operation. */
+.background-image-preview {
+  position: relative;
+  display: grid;
+  min-height: 180px;
+  overflow: hidden;
+  place-items: end start;
+  padding: 18px;
+  border: 1px solid var(--white-border);
+  border-radius: 20px;
+  color: white;
+  background-position: center;
+  background-size: cover;
+  box-shadow: 0 14px 34px rgba(45, 27, 23, .14);
+}
+
+.background-image-preview::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(transparent, rgba(30, 19, 17, .72));
+}
+
+.background-image-preview span {
+  position: relative;
+  z-index: 1;
+  font-weight: 800;
+}
+
+.theme-save-bar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+  border: 1px solid var(--white-border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface-color) 94%, transparent);
+  box-shadow: 0 18px 45px rgba(45, 27, 23, .17);
+  backdrop-filter: blur(var(--glass-blur));
+}
+
+.theme-save-bar > div {
+  display: grid;
+  gap: 3px;
+}
+
+.theme-save-bar small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.theme-save-status {
+  margin: 5px 0 0;
+  color: var(--success);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+/* Analytics spacing. */
+.analytics-filters {
+  padding: 28px;
+  gap: 22px;
+}
+
+.analytics-metrics {
+  margin: 20px 0;
+}
+
+.chart-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 420px;
+  padding: 28px;
+}
+
+.chart-empty {
+  display: grid;
+  min-height: 240px;
+  flex: 1;
+  place-items: center;
+  padding: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.expense-bars {
+  padding: 12px 2px 4px;
+}
+
+.shift-analysis-card {
+  padding: 28px;
+}
+
+/* Four clear employee actions: services, cart, shift and logout. */
+.mobile-nav.employee {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 900px) {
+  .cash-hero > strong {
+    font-size: 56px;
+  }
+
+  .month-card > strong {
+    font-size: 32px;
+  }
+
+  .metric > strong {
+    font-size: 24px;
+  }
+
+  .cashbox-balance {
+    font-size: 52px;
+  }
+
+  .analytics-grid {
+    gap: 15px;
+  }
+
+  .shift-data-table {
+    min-width: 820px;
+  }
+}
+
+@media (max-width: 640px) {
+  body {
+    font-size: 15px;
+  }
+
+  .page-content {
+    padding-right: 15px;
+    padding-left: 15px;
+  }
+
+  .cash-hero {
+    min-height: 300px;
+    padding: 23px;
+  }
+
+  .cash-hero > strong {
+    margin: 32px 0;
+    font-size: 48px;
+  }
+
+  .cash-hero-head {
+    font-size: 13px;
+  }
+
+  .hero-buttons button {
+    min-height: 72px;
+    font-size: 11px;
+  }
+
+  .month-card {
+    padding: 20px;
+  }
+
+  .month-card > strong {
+    font-size: 29px;
+  }
+
+  .metric {
+    min-height: 128px;
+    padding: 17px;
+  }
+
+  .metric > span {
+    font-size: 13px;
+  }
+
+  .metric > strong {
+    font-size: 21px;
+  }
+
+  .cashbox-balance {
+    margin: 25px 0;
+    font-size: 45px;
+  }
+
+  .analytics-filters,
+  .chart-card,
+  .shift-analysis-card,
+  .shift-history {
+    padding: 19px;
+  }
+
+  .analytics-filters {
+    gap: 18px;
+  }
+
+  .filter-top {
+    gap: 14px;
+  }
+
+  .month-filters {
+    gap: 10px;
+  }
+
+  .analytics-metrics {
+    gap: 11px;
+  }
+
+  .analytics-metrics .metric {
+    min-height: 125px;
+  }
+
+  .analytics-grid {
+    gap: 14px;
+  }
+
+  .chart-card {
+    min-height: 330px;
+  }
+
+  .flow-chart {
+    min-width: 500px;
+    height: 245px;
+  }
+
+  .expense-chart-card {
+    min-height: 290px;
+  }
+
+  .chart-empty {
+    min-height: 190px;
+    padding: 18px;
+  }
+
+  .expense-bar-row > div {
+    font-size: 13px;
+  }
+
+  .shift-data-table {
+    min-width: 760px;
+  }
+
+  .shift-data-table th,
+  .shift-data-table td {
+    padding: 13px 10px;
+    font-size: 12px;
+  }
+
+  .appearance-panel {
+    gap: 18px;
+  }
+
+  .theme-save-bar {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 15px;
+  }
+
+  .theme-save-bar .button {
+    width: 100%;
+  }
+
+  .background-image-preview {
+    min-height: 150px;
+  }
+
+  .backup-panel {
+    min-height: auto;
+  }
+
+  .backup-buttons {
+    gap: 9px;
+  }
+}
+
+@media (max-width: 370px) {
+  .cash-hero > strong {
+    font-size: 42px;
+  }
+
+  .metric > strong {
+    font-size: 20px;
+  }
+}

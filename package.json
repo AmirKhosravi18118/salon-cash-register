@@ -1,7 +1,7 @@
 {
   "name": "firouzeh-salon-panel",
   "private": true,
-  "version": "0.9.0-test",
+  "version": "0.9.1-test",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"

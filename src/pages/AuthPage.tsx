@@ -79,7 +79,7 @@ export function AuthPage({ onAuthenticated }: {
             {busy ? 'لطفاً صبر کنید…' : mode === 'setup' ? 'ساخت حساب مدیر' : 'ورود'}
           </button>
         </form>
-        <small className="auth-version">نسخه آزمایشی <span className="numeric">0.9.0</span></small>
+        <small className="auth-version">نسخه آزمایشی <span className="numeric">0.9.1</span></small>
       </Card>
     </div>
   )

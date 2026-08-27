@@ -50,7 +50,7 @@ export async function ensureDatabase(): Promise<void> {
   if (!await db.settings.get('sequence')) {
     await db.settings.put({ key: 'sequence', value: '0' })
   }
-  await db.settings.put({ key: 'appVersion', value: '0.9.0-test' })
+  await db.settings.put({ key: 'appVersion', value: '0.9.1-test' })
 }
 
 export async function getCashBalance(): Promise<number> {
@@ -65,16 +65,18 @@ export async function getOpenShift(): Promise<WorkShift | undefined> {
   return db.shifts.where('status').equals('open').first()
 }
 
-export async function openShift(user: UserAccount, initialBalance?: number): Promise<WorkShift> {
+export async function openShift(
+  user: UserAccount,
+  countedOpeningCents?: number,
+): Promise<WorkShift> {
   const existing = await getOpenShift()
   if (existing) return existing
 
-  const shiftCount = await db.shifts.count()
-  let cashBalance = await getCashBalance()
-  if (shiftCount === 0 && await db.transactions.count() === 0 && initialBalance !== undefined) {
-    cashBalance = Math.max(0, Math.round(initialBalance))
-    await setCashBalance(cashBalance)
-  }
+  const expected = await getCashBalance()
+  const counted = countedOpeningCents === undefined
+    ? expected
+    : Math.max(0, Math.round(countedOpeningCents))
+  const difference = counted - expected
 
   const shift: WorkShift = {
     id: uid('shift'),
@@ -82,12 +84,42 @@ export async function openShift(user: UserAccount, initialBalance?: number): Pro
     openedAt: nowIso(),
     openedByUserId: user.id,
     openedByName: user.name,
-    openingBalanceCents: cashBalance,
+    openingBalanceCents: counted,
+    expectedOpeningCents: expected,
+    openingDifferenceCents: difference,
   }
-  await db.shifts.add(shift)
+
+  await db.transaction(
+    'rw',
+    db.shifts,
+    db.settings,
+    db.transactions,
+    async () => {
+      await db.shifts.add(shift)
+
+      if (difference !== 0) {
+        await addTransactionInside({
+          kind: 'adjustment',
+          direction: difference >= 0 ? 'in' : 'out',
+          amountCents: Math.abs(difference),
+          serviceSubtotalCents: 0,
+          taxIncludedCents: 0,
+          tipCents: 0,
+          note: 'اصلاح اختلاف شروع شیفت',
+          items: [],
+          categoryName: 'اصلاح موجودی',
+          user,
+          shiftId: shift.id,
+          updateBalance: false,
+        })
+      }
+
+      await setCashBalance(counted)
+    },
+  )
+
   return shift
 }
-
 export async function closeShift(
   user: UserAccount,
   countedBalanceCents: number,
@@ -312,7 +344,7 @@ export async function deleteExpenseCategory(id: string): Promise<void> {
 
 export async function exportDatabase(): Promise<string> {
   return JSON.stringify({
-    version: '0.9.0-test',
+    version: '0.9.1-test',
     exportedAt: nowIso(),
     users: await db.users.toArray(),
     serviceCategories: await db.serviceCategories.toArray(),

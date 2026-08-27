@@ -6,10 +6,12 @@ import {
   deleteExpenseCategory, deleteService, deleteServiceCategory,
   db, saveExpenseCategory, saveService, saveServiceCategory,
 } from '../db'
-import { downloadExcel, downloadJsonBackup } from '../lib/export'
+import {
+  downloadExcel, downloadIncomeExcel, downloadJsonBackup, downloadOutcomeExcel,
+} from '../lib/export'
 import { moneyInputValue, parseMoney, uid } from '../lib/format'
 import {
-  defaultTheme, loadTheme, resetTheme, saveTheme,
+  applyTheme, loadTheme, resetTheme, saveTheme,
 } from '../lib/theme'
 import type {
   ExpenseCategory, PricingMode, SalonService, ServiceCategory,
@@ -232,18 +234,78 @@ function EmployeeForm({
 
 function AppearancePanel() {
   const [theme, setTheme] = useState<ThemeSettings>(loadTheme)
+  const [status, setStatus] = useState('')
+  const [processingImage, setProcessingImage] = useState(false)
 
-  const patch = <K extends keyof ThemeSettings>(key: K, value: ThemeSettings[K]) => {
+  useEffect(() => {
+    return () => applyTheme(loadTheme())
+  }, [])
+
+  const patch = <K extends keyof ThemeSettings>(
+    key: K,
+    value: ThemeSettings[K],
+  ) => {
     const next = { ...theme, [key]: value }
     setTheme(next)
-    saveTheme(next)
+    applyTheme(next)
+    setStatus('')
   }
 
   const imageSelected = (file?: File) => {
     if (!file) return
+    setProcessingImage(true)
+    setStatus('')
+
     const reader = new FileReader()
-    reader.onload = () => patch('backgroundImage', String(reader.result ?? ''))
+    reader.onerror = () => {
+      setProcessingImage(false)
+      setStatus('تصویر قابل خواندن نیست.')
+    }
+
+    reader.onload = () => {
+      const image = new Image()
+
+      image.onerror = () => {
+        setProcessingImage(false)
+        setStatus('فرمت تصویر پشتیبانی نمی‌شود.')
+      }
+
+      image.onload = () => {
+        const maximum = 1600
+        const ratio = Math.min(1, maximum / Math.max(image.width, image.height))
+        const width = Math.max(1, Math.round(image.width * ratio))
+        const height = Math.max(1, Math.round(image.height * ratio))
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+
+        const context = canvas.getContext('2d')
+        if (!context) {
+          setProcessingImage(false)
+          setStatus('پردازش تصویر انجام نشد.')
+          return
+        }
+
+        context.drawImage(image, 0, 0, width, height)
+        const optimized = canvas.toDataURL('image/webp', 0.82)
+        patch('backgroundImage', optimized)
+        setProcessingImage(false)
+        setStatus('تصویر آماده است. برای ذخیره، دکمه ثبت تغییرات را بزنید.')
+      }
+
+      image.src = String(reader.result ?? '')
+    }
+
     reader.readAsDataURL(file)
+  }
+
+  const saveAppearance = () => {
+    try {
+      saveTheme(theme)
+      setStatus('تغییرات ظاهر ذخیره و روی کل برنامه اعمال شد.')
+    } catch {
+      setStatus('حجم تصویر زیاد است. یک تصویر کوچک‌تر انتخاب کنید.')
+    }
   }
 
   const colors: Array<{ key: keyof ThemeSettings; label: string }> = [
@@ -261,51 +323,123 @@ function AppearancePanel() {
   return (
     <div className="appearance-panel">
       <div className="appearance-preview">
-        <span>پیش‌نمایش</span>
-        <button className="button primary">دکمه اصلی</button>
-        <button className="button secondary">دکمه دوم</button>
+        <span>پیش‌نمایش زنده</span>
+        <button className="button primary" type="button">دکمه اصلی</button>
+        <button className="button secondary" type="button">دکمه دوم</button>
       </div>
+
+      {theme.backgroundImage && (
+        <div className="background-image-preview"
+          style={{ backgroundImage: `url("${theme.backgroundImage}")` }}>
+          <span>پیش‌نمایش تصویر پس‌زمینه</span>
+        </div>
+      )}
+
       <div className="color-grid">
         {colors.map((item) => (
           <label className="color-field" key={item.key}>
             <span>{item.label}</span>
             <input type="color" value={String(theme[item.key])}
-              onChange={(event) => patch(item.key, event.target.value as never)}/>
+              onChange={(event) =>
+                patch(item.key, event.target.value as never)}/>
           </label>
         ))}
       </div>
+
       <div className="range-grid">
-        <label className="field"><span>گردی کارت‌ها: <b className="numeric">{theme.radius}px</b></span>
+        <label className="field">
+          <span>
+            گردی کارت‌ها:
+            {' '}
+            <b className="numeric">{theme.radius}px</b>
+          </span>
           <input type="range" min="8" max="36" value={theme.radius}
-            onChange={(event) => patch('radius', Number(event.target.value))}/></label>
-        <label className="field"><span>قدرت سایه: <b className="numeric">{theme.shadow}%</b></span>
+            onChange={(event) => patch('radius', Number(event.target.value))}/>
+        </label>
+
+        <label className="field">
+          <span>
+            قدرت سایه:
+            {' '}
+            <b className="numeric">{theme.shadow}%</b>
+          </span>
           <input type="range" min="0" max="40" value={theme.shadow}
-            onChange={(event) => patch('shadow', Number(event.target.value))}/></label>
-        <label className="field"><span>تاری شیشه: <b className="numeric">{theme.blur}px</b></span>
+            onChange={(event) => patch('shadow', Number(event.target.value))}/>
+        </label>
+
+        <label className="field">
+          <span>
+            تاری شیشه:
+            {' '}
+            <b className="numeric">{theme.blur}px</b>
+          </span>
           <input type="range" min="0" max="36" value={theme.blur}
-            onChange={(event) => patch('blur', Number(event.target.value))}/></label>
-        <label className="field"><span>شفافیت کارت‌ها: <b className="numeric">{theme.surfaceOpacity}%</b></span>
+            onChange={(event) => patch('blur', Number(event.target.value))}/>
+        </label>
+
+        <label className="field">
+          <span>
+            شفافیت کارت‌ها:
+            {' '}
+            <b className="numeric">{theme.surfaceOpacity}%</b>
+          </span>
           <input type="range" min="35" max="100" value={theme.surfaceOpacity}
-            onChange={(event) => patch('surfaceOpacity', Number(event.target.value))}/></label>
-        <label className="field"><span>شدت تصویر پس‌زمینه: <b className="numeric">{theme.backgroundImageOpacity}%</b></span>
-          <input type="range" min="0" max="100" value={theme.backgroundImageOpacity}
-            onChange={(event) => patch('backgroundImageOpacity', Number(event.target.value))}/></label>
+            onChange={(event) =>
+              patch('surfaceOpacity', Number(event.target.value))}/>
+        </label>
+
+        <label className="field">
+          <span>
+            شدت تصویر پس‌زمینه:
+            {' '}
+            <b className="numeric">{theme.backgroundImageOpacity}%</b>
+          </span>
+          <input type="range" min="0" max="100"
+            value={theme.backgroundImageOpacity}
+            onChange={(event) =>
+              patch('backgroundImageOpacity', Number(event.target.value))}/>
+        </label>
       </div>
+
       <div className="background-actions">
-        <label className="button secondary file-button"><Icon name="upload"/>انتخاب تصویر
-          <input type="file" accept="image/*"
-            onChange={(event) => imageSelected(event.target.files?.[0])}/></label>
+        <label className="button secondary file-button">
+          <Icon name="upload"/>
+          {processingImage ? 'در حال آماده‌سازی تصویر…' : 'انتخاب تصویر'}
+          <input type="file" accept="image/*" disabled={processingImage}
+            onChange={(event) => imageSelected(event.target.files?.[0])}/>
+        </label>
+
         <button className="button secondary" type="button"
-          onClick={() => patch('backgroundImage', '')}>حذف تصویر</button>
+          onClick={() => patch('backgroundImage', '')}>
+          حذف تصویر
+        </button>
+
         <button className="button danger" type="button" onClick={() => {
           const next = resetTheme()
           setTheme(next)
-        }}><Icon name="power"/>بازگشت به تم اصلی</button>
+          setStatus('تم اصلی بازیابی شد.')
+        }}>
+          <Icon name="power"/>بازگشت به تم اصلی
+        </button>
+      </div>
+
+      <div className="theme-save-bar">
+        <div>
+          <strong>ثبت ظاهر برنامه</strong>
+          <small>
+            رنگ‌ها، شفافیت و تصویر پس‌زمینه پس از ثبت برای ورودهای بعدی حفظ می‌شوند.
+          </small>
+          {status && <p className="theme-save-status">{status}</p>}
+        </div>
+
+        <button className="button primary" type="button"
+          onClick={saveAppearance} disabled={processingImage}>
+          <Icon name="save"/>ذخیره و اعمال تغییرات
+        </button>
       </div>
     </div>
   )
 }
-
 export function SettingsPage({
   user, revision, onChanged, initialTab,
 }: {
@@ -498,14 +632,33 @@ export function SettingsPage({
 
         {tab === 'backup' && (
           <div className="backup-panel">
-            <div className="panel-heading"><div><h2>پشتیبان و خروجی</h2>
-              <p>خروجی اطلاعات تست و گزارش Excel</p></div><Icon name="download"/></div>
+            <div className="panel-heading">
+              <div>
+                <h2>پشتیبان و خروجی</h2>
+                <p>پشتیبان کامل و فایل‌های جداگانه ورودی و هزینه‌ها</p>
+              </div>
+              <Icon name="download"/>
+            </div>
+
             <div className="backup-buttons">
-              <button className="button primary" type="button" onClick={downloadJsonBackup}>
+              <button className="button primary" type="button"
+                onClick={downloadJsonBackup}>
                 <Icon name="download"/>دانلود پشتیبان JSON
               </button>
-              <button className="button secondary" type="button" onClick={downloadExcel}>
-                <Icon name="download"/>دانلود گزارش Excel
+
+              <button className="button secondary" type="button"
+                onClick={downloadIncomeExcel}>
+                <Icon name="download"/>Excel ورودی‌ها
+              </button>
+
+              <button className="button secondary" type="button"
+                onClick={downloadOutcomeExcel}>
+                <Icon name="download"/>Excel هزینه‌ها و خروجی‌ها
+              </button>
+
+              <button className="button secondary" type="button"
+                onClick={downloadExcel}>
+                <Icon name="download"/>Excel گزارش کامل
               </button>
             </div>
           </div>

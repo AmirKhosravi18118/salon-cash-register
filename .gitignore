@@ -12,3 +12,6 @@ SYNC_*.txt
 UPDATE_*.txt
 .DS_Store
 Thumbs.db
+
+# Firouzeh local update packages
+Firouzeh_*Update*/

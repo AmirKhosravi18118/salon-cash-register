@@ -95,6 +95,8 @@ export interface WorkShift {
   openedByUserId: string
   openedByName: string
   openingBalanceCents: number
+  expectedOpeningCents?: number
+  openingDifferenceCents?: number
   closedAt?: string
   closedByUserId?: string
   closedByName?: string
