@@ -1,0 +1,29 @@
+{
+  "package": "Firouzeh_Project_Cleanup_v1",
+  "created": "2026-08-27",
+  "keeps": [
+    "src",
+    "public",
+    "scripts",
+    "node_modules",
+    ".github",
+    "Dockerfile",
+    "compose.yaml",
+    "Caddyfile"
+  ],
+  "removes": [
+    "old Firouzeh update folders",
+    ".update-backups",
+    "dist",
+    "PROJECT_FILES.txt"
+  ],
+  "safety": [
+    "verifies package.json and src",
+    "creates source backup before deletion",
+    "keeps terminal open on errors"
+  ],
+  "automation": [
+    "creates Git commit for cleanup",
+    "pushes cleanup to origin/main when authenticated"
+  ]
+}

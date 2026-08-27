@@ -15,3 +15,7 @@ Thumbs.db
 
 # Firouzeh local update packages
 Firouzeh_*Update*/
+node_modules/
+dist/
+.env.*.local
+*.log

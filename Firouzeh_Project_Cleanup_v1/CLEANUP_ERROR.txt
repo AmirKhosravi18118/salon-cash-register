@@ -1,0 +1,5 @@
+﻿CLEANUP FAILED
+Exception calling "Add" with "1" argument(s): "Collection was of a fixed size."
+
+No source file was intentionally modified except .gitignore after the backup step.
+Log: D:\salon-cash-register\Firouzeh_Project_Cleanup_v1\CLEANUP_LOG.txt

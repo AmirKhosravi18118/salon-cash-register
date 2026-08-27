@@ -1,0 +1,17 @@
+{
+  "artifact": "Firouzeh_Cleanup_Finalizer_v2",
+  "date": "2026-08-27",
+  "encoding": "ASCII batch without BOM",
+  "powershell_required": false,
+  "deletes_source_files": false,
+  "actions": [
+    "append missing gitignore rules",
+    "remove generated folders from git index only",
+    "git add -A",
+    "create cleanup commit if needed",
+    "push HEAD to origin/main",
+    "verify local and remote commit hashes"
+  ],
+  "expected_project": "D:\\salon-cash-register",
+  "preserved_backup": "D:\\Firouzeh_Final_Source_Backup_20260827-231412.zip"
+}
